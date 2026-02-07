@@ -1,5 +1,5 @@
 # Runner image for AutomationHub: copies code and starts FastAPI.
-FROM isrotelautomation.azurecr.io/automation-hub-base:latest
+FROM test-automation.azurecr.io/automation-hub-base:latest
 
 USER root
 WORKDIR /app
@@ -17,5 +17,6 @@ EXPOSE 80
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD curl -fsS http://localhost:80/api/health || exit 1
+
 
 CMD ["python3", "/app/src/main.py"]
