@@ -1,0 +1,119 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css" />
+  <title>AutomationHub</title>
+</head>
+
+<body>
+<div class="page-wrap">
+
+  <!-- Header -->
+  <div class="card header-card">
+    <div class="header-top">
+      <div class="brand">
+        <div class="logo">AH</div>
+        <div>
+          <div class="brand-title">AutomationHub Reports</div>
+          <div class="brand-sub">Browse test runs by environment, platform and suite.</div>
+        </div>
+      </div>
+      <div class="header-actions">
+        <span id="lastUpdated" class="updated-chip" style="display:none"></span>
+        <button id="refreshBtn" class="btn btn-primary">Refresh</button>
+        <button id="themeToggle" class="toggle" aria-label="Toggle dark mode">
+          <span class="toggle-knob">⭐</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="filters">
+      <div class="field">
+        <label class="field-label">Environment</label>
+        <div class="dd" id="envSel" data-value="">
+          <div class="dd-trigger"><span class="dd-label">All</span><svg class="dd-chevron" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="2,4 6,8 10,4"/></svg></div>
+          <div class="dd-panel">
+            <div class="dd-option active" data-value="">All</div>
+            <div class="dd-option" data-value="qa">QA</div>
+            <div class="dd-option" data-value="stage">Stage</div>
+            <div class="dd-option" data-value="prod">Production</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="field">
+        <label class="field-label">Platform</label>
+        <div class="dd" id="platformSel" data-value="">
+          <div class="dd-trigger"><span class="dd-label">All</span><svg class="dd-chevron" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="2,4 6,8 10,4"/></svg></div>
+          <div class="dd-panel">
+            <div class="dd-option active" data-value="">All</div>
+            <div class="dd-option" data-value="web">Web</div>
+            <div class="dd-option" data-value="mobile">Mobile</div>
+            <div class="dd-option" data-value="whitelabel">White Label</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="field">
+        <label class="field-label">Suite</label>
+        <div class="dd" id="suiteSel" data-value="all">
+          <div class="dd-trigger"><span class="dd-label">All</span><svg class="dd-chevron" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="2,4 6,8 10,4"/></svg></div>
+          <div class="dd-panel">
+            <div class="dd-option active" data-value="all">All</div>
+            <div class="dd-option" data-value="smoke">Smoke</div>
+            <div class="dd-option" data-value="regression">Regression</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="field">
+        <label class="field-label">Search</label>
+        <div class="input-wrap">
+          <svg class="input-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+            <circle cx="7" cy="7" r="4.5"/>
+            <line x1="10.5" y1="10.5" x2="14" y2="14"/>
+          </svg>
+          <input id="qInput" placeholder="Search run_id, status …" />
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Table -->
+  <div class="card table-card">
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th data-col="run_id" data-type="string"><span class="th-inner">Run ID<svg class="sort-arrow desc" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="2,4 6,8 10,4"/></svg></span></th>
+            <th data-col="suite" data-type="string"><span class="th-inner">Suite<svg class="sort-arrow desc" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="2,4 6,8 10,4"/></svg></span></th>
+            <th data-col="env" data-type="string"><span class="th-inner">Env<svg class="sort-arrow desc" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="2,4 6,8 10,4"/></svg></span></th>
+            <th data-col="version" data-type="string"><span class="th-inner">Version<svg class="sort-arrow desc" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="2,4 6,8 10,4"/></svg></span></th>
+            <th data-col="automation_build_number" data-type="string"><span class="th-inner">Build #<svg class="sort-arrow desc" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="2,4 6,8 10,4"/></svg></span></th>
+            <th data-col="platform" data-type="string"><span class="th-inner">Platform<svg class="sort-arrow desc" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="2,4 6,8 10,4"/></svg></span></th>
+            <th data-col="status" data-type="status"><span class="th-inner">Status<svg class="sort-arrow desc" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="2,4 6,8 10,4"/></svg></span></th>
+            <th data-col="started_at" data-type="date"><span class="th-inner">Started<svg class="sort-arrow desc" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="2,4 6,8 10,4"/></svg></span></th>
+            <th data-col="duration" data-type="duration"><span class="th-inner">Duration<svg class="sort-arrow desc" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="2,4 6,8 10,4"/></svg></span></th>
+            <th>Report</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div class="footer-bar">
+    <span id="countLbl" class="count-lbl"></span>
+    <div id="pagination" class="pagination"></div>
+  </div>
+
+</div><!-- /page-wrap -->
+
+<script src="/static/app.js"></script>
+</body>
+</html>
