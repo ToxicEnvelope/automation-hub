@@ -1,0 +1,663 @@
+// ─── Elements ───
+const suiteFilter    = document.getElementById("suiteFilter");
+const envFilter      = document.getElementById("envFilter");
+const platformFilter = document.getElementById("platformFilter");
+const qInput         = document.getElementById("qInput");
+const rows           = document.getElementById("rows");
+const refreshBtn     = document.getElementById("refreshBtn");
+const pagination     = document.getElementById("pagination");
+const countLbl       = document.getElementById("countLbl");
+const lastUpdated    = document.getElementById("lastUpdated");
+const themeToggle    = document.getElementById("themeToggle");
+const tableCard      = document.getElementById("tableCard");
+const clearFiltersBtn = document.getElementById("clearFiltersBtn");
+const statsSection = document.getElementById("statsSection");
+const statsDrawerToggle = document.getElementById("statsDrawerToggle");
+const statsDrawerLabel = document.getElementById("statsDrawerLabel");
+
+const statTotal = document.getElementById("statTotal");
+const statTotalSub = document.getElementById("statTotalSub");
+const statPassRate = document.getElementById("statPassRate");
+const statPassRateSub = document.getElementById("statPassRateSub");
+const statRunning = document.getElementById("statRunning");
+const statAvgDuration = document.getElementById("statAvgDuration");
+
+let isLoading = false;
+let allRuns = [];
+let currentPage = 1;
+let sortCol = null;
+let sortDir = -1;
+let suiteFilterValue = "";
+let envFilterValue = "";
+let platformFilterValue = "";
+const ITEMS_PER_PAGE = 25;
+let chartStatus, chartSuite, chartEnv, chartPlatform;
+
+// ─── Stats drawer ───
+const STATS_DRAWER_KEY = "ah-stats-collapsed";
+
+function setStatsDrawerCollapsed(collapsed) {
+  if (!statsSection || !statsDrawerToggle) return;
+  statsSection.classList.toggle("is-collapsed", collapsed);
+  statsDrawerToggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  if (statsDrawerLabel) statsDrawerLabel.textContent = collapsed ? "Expand" : "Collapse";
+  localStorage.setItem(STATS_DRAWER_KEY, collapsed ? "1" : "0");
+}
+
+function initStatsDrawer() {
+  if (!statsDrawerToggle) return;
+  const savedCollapsed = localStorage.getItem(STATS_DRAWER_KEY) === "1";
+  setStatsDrawerCollapsed(savedCollapsed);
+  statsDrawerToggle.addEventListener("click", () => {
+    const collapsed = statsSection?.classList.contains("is-collapsed") || false;
+    setStatsDrawerCollapsed(!collapsed);
+
+    // When reopening, force Chart.js to recalculate dimensions after the drawer animation.
+    if (collapsed) {
+      setTimeout(() => {
+        [chartStatus, chartSuite, chartEnv, chartPlatform].forEach(chart => chart?.resize?.());
+      }, 320);
+    }
+  });
+}
+
+// ─── Loading States ───
+function showStatsLoading(useOverlay = false) {
+  document.querySelectorAll('.stat-card').forEach(card => {
+    if (useOverlay) {
+      card.querySelector('.loading-overlay')?.classList.add('active');
+    } else {
+      card.classList.add('loading');
+      if (!card.querySelector('.skeleton-value')) {
+        card.insertAdjacentHTML('beforeend', `
+          <div class="skeleton skeleton-title"></div>
+          <div class="skeleton skeleton-value"></div>
+          <div class="skeleton skeleton-subtitle"></div>
+        `);
+      }
+    }
+  });
+}
+
+function hideStatsLoading() {
+  document.querySelectorAll('.stat-card').forEach(card => {
+    card.classList.remove('loading');
+    card.querySelectorAll('.skeleton').forEach(s => s.remove());
+    card.querySelector('.loading-overlay')?.classList.remove('active');
+  });
+}
+
+function showChartsLoading(useOverlay = false) {
+  document.querySelectorAll('.chart-card').forEach(card => {
+    if (useOverlay) {
+      card.querySelector('.loading-overlay')?.classList.add('active');
+    } else {
+      card.classList.add('loading');
+      const wrap = card.querySelector('.chart-wrap');
+      if (wrap && !wrap.querySelector('.skeleton-chart')) {
+        wrap.insertAdjacentHTML('beforeend', '<div class="skeleton skeleton-chart"></div>');
+      }
+    }
+  });
+}
+
+function hideChartsLoading() {
+  document.querySelectorAll('.chart-card').forEach(card => {
+    card.classList.remove('loading');
+    card.querySelectorAll('.skeleton').forEach(s => s.remove());
+    card.querySelector('.loading-overlay')?.classList.remove('active');
+  });
+}
+
+function showTableInitialLoading() {
+  rows.innerHTML = `
+    <tr>
+      <td colspan="10" style="text-align:center; padding:60px 20px;">
+        <div class="spinner" style="margin:0 auto 16px;"></div>
+        <div style="color:var(--text-secondary); font-size:14px;">Loading test runs...</div>
+      </td>
+    </tr>
+  `;
+}
+
+function setTableRefreshing(v) {
+  tableCard?.classList.toggle("is-loading", !!v);
+}
+
+// ─── Charts ───
+function getChartColors() {
+  const isDark = document.documentElement.classList.contains("dark");
+  return {
+    passed: isDark ? "#86efac" : "#16a34a",
+    failed: isDark ? "#fca5a5" : "#dc2626",
+    running: isDark ? "#93c5fd" : "#3b82f6",
+    other: isDark ? "#fde047" : "#eab308",
+    text: isDark ? "#e5e7eb" : "#4b5563"
+  };
+}
+
+function initCharts() {
+  if (typeof Chart === "undefined") return;
+  const colors = getChartColors();
+  const commonOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: { legend: { position: 'bottom', labels: { color: colors.text, padding: 12, font: { size: 11 } } } }
+  };
+
+  const c1 = document.getElementById('chartStatus');
+  const c2 = document.getElementById('chartSuite');
+  const c3 = document.getElementById('chartEnv');
+  const c4 = document.getElementById('chartPlatform');
+  if (!c1 || !c2 || !c3 || !c4) return;
+
+  chartStatus = new Chart(c1, { type: 'doughnut', data: { labels: [], datasets: [{ data: [], backgroundColor: [], borderWidth: 0 }] }, options: commonOptions });
+  chartSuite = new Chart(c2, { type: 'doughnut', data: { labels: [], datasets: [{ data: [], backgroundColor: ['#4f46e5', '#06b6d4', '#10b981'], borderWidth: 0 }] }, options: commonOptions });
+  chartEnv = new Chart(c3, { type: 'doughnut', data: { labels: [], datasets: [{ data: [], backgroundColor: ['#10b981', '#f59e0b', '#ef4444'], borderWidth: 0 }] }, options: commonOptions });
+  chartPlatform = new Chart(c4, { type: 'doughnut', data: { labels: [], datasets: [{ data: [], backgroundColor: ['#3b82f6', '#ec4899', '#a855f7'], borderWidth: 0 }] }, options: commonOptions });
+}
+
+function updateChart(chart, counts, colorMap) {
+  if (!chart) return;
+  const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  chart.data.labels = entries.map(([k, v]) => `${k} (${v})`);
+  chart.data.datasets[0].data = entries.map(([, v]) => v);
+  if (colorMap) chart.data.datasets[0].backgroundColor = entries.map(([k]) => colorMap[k] || colorMap.unknown);
+  chart.update('none');
+}
+
+function updateStatistics() {
+  const total = allRuns.length;
+  if (total === 0) {
+    statTotal.textContent = "0";
+    statTotalSub.textContent = "No data";
+    statPassRate.textContent = "0%";
+    statPassRateSub.textContent = "0 passed / 0 total";
+    statRunning.textContent = "0";
+    statAvgDuration.textContent = "--";
+    return;
+  }
+
+  const statusCounts = {};
+  const suiteCounts = {};
+  const envCounts = {};
+  const platformCounts = {};
+  let passedCount = 0;
+  let runningCount = 0;
+  let totalDuration = 0;
+  let completedCount = 0;
+
+  allRuns.forEach(r => {
+    const status = String(r.status || "unknown").toLowerCase();
+    statusCounts[status] = (statusCounts[status] || 0) + 1;
+    suiteCounts[r.suite || "unknown"] = (suiteCounts[r.suite || "unknown"] || 0) + 1;
+    envCounts[r.env || "unknown"] = (envCounts[r.env || "unknown"] || 0) + 1;
+    platformCounts[r.platform || "unknown"] = (platformCounts[r.platform || "unknown"] || 0) + 1;
+    if (status === "passed") passedCount++;
+    if (status === "running") runningCount++;
+    if (status !== "running") {
+      const ms = durMs(r);
+      if (Number.isFinite(ms) && ms > 0) {
+        totalDuration += ms;
+        completedCount++;
+      }
+    }
+  });
+
+  statTotal.textContent = total.toLocaleString();
+  statTotalSub.textContent = "Loaded from last 12 hours";
+  const passRate = Math.round((passedCount / total) * 100);
+  statPassRate.textContent = `${passRate}%`;
+  statPassRateSub.textContent = `${passedCount} passed / ${total} total`;
+  statRunning.textContent = runningCount.toLocaleString();
+  statAvgDuration.textContent = completedCount > 0 ? formatDuration(totalDuration / completedCount) : "--";
+
+  const colors = getChartColors();
+  updateChart(chartStatus, statusCounts, { passed: colors.passed, failed: colors.failed, running: colors.running, unknown: colors.other });
+  updateChart(chartSuite, suiteCounts, null);
+  updateChart(chartEnv, envCounts, null);
+  updateChart(chartPlatform, platformCounts, null);
+}
+
+// ─── Theme ───
+(function initTheme() {
+  const saved = localStorage.getItem("ah-theme");
+  if (saved === "dark") document.documentElement.classList.add("dark");
+})();
+
+themeToggle.addEventListener("click", () => {
+  document.documentElement.classList.toggle("dark");
+  const dark = document.documentElement.classList.contains("dark");
+  localStorage.setItem("ah-theme", dark ? "dark" : "light");
+  if (chartStatus) updateStatistics();
+});
+
+// ─── Filter chips ───
+function bindChipGroup(groupEl, onChange) {
+  if (!groupEl) return;
+  groupEl.addEventListener("click", (e) => {
+    const btn = e.target.closest(".filter-chip");
+    if (!btn) return;
+    groupEl.querySelectorAll(".filter-chip").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    onChange(btn.dataset.value || "");
+  });
+}
+
+function resetChipGroup(groupEl) {
+  if (!groupEl) return;
+  groupEl.querySelectorAll(".filter-chip").forEach(b => {
+    b.classList.toggle("active", (b.dataset.value || "") === "");
+  });
+}
+
+bindChipGroup(suiteFilter, (value) => {
+  suiteFilterValue = value;
+  currentPage = 1;
+  load({ preserveExisting: true, refresh: true });
+});
+
+bindChipGroup(envFilter, (value) => {
+  envFilterValue = value;
+  currentPage = 1;
+  load({ preserveExisting: true, refresh: true });
+});
+
+bindChipGroup(platformFilter, (value) => {
+  platformFilterValue = value;
+  currentPage = 1;
+  load({ preserveExisting: true, refresh: true });
+});
+
+// ─── SVG icons for table cells ───
+function iconSuite() {
+  return `<svg class="cell-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 2 2.5 5 8 8l5.5-3L8 2Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M2.5 8 8 11l5.5-3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M2.5 11 8 14l5.5-3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+}
+function iconEnvironment() {
+  return `<svg class="cell-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="2.5" y="3" width="11" height="4" rx="1.2" stroke="currentColor" stroke-width="1.5"/><rect x="2.5" y="9" width="11" height="4" rx="1.2" stroke="currentColor" stroke-width="1.5"/><path d="M5 5h.01M5 11h.01M7.5 5h3.5M7.5 11h3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`;
+}
+function iconPlatform() {
+  return `<svg class="cell-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="2.5" y="3" width="11" height="8" rx="1.4" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 13h3M8 11v2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`;
+}
+function iconVersion() {
+  return `<svg class="cell-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 3.5h5.5L13 8l-5 5-5-5V3.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><circle cx="6" cy="6" r="1" fill="currentColor"/></svg>`;
+}
+function iconBuild() {
+  return `<svg class="cell-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 2.5 4.8 13.5M11.2 2.5 10 13.5M3 6h10M2.5 10h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`;
+}
+function iconReport() {
+  return `<svg class="cell-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6.5 4H4.2A1.2 1.2 0 0 0 3 5.2v6.6A1.2 1.2 0 0 0 4.2 13h6.6a1.2 1.2 0 0 0 1.2-1.2V9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M9 3h4v4M8 8l5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+}
+
+function buildReportViewerUrl(r) {
+  const p = new URLSearchParams();
+  p.set("suite", String(r?.suite || ""));
+  p.set("env", String(r?.env || ""));
+  p.set("platform", String(r?.platform || ""));
+  p.set("run_id", String(r?.run_id || ""));
+  return `/report-viewer.html?${p.toString()}`;
+}
+
+// ─── Utils ───
+function escapeHtml(s) {
+  return String(s ?? "")
+    .replaceAll("&","&amp;")
+    .replaceAll("<","&lt;")
+    .replaceAll(">","&gt;")
+    .replaceAll('"',"&quot;")
+    .replaceAll("'","&#39;");
+}
+
+function safeDate(v) {
+  if (!v) return null;
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function formatDuration(ms) {
+  if (ms == null || !Number.isFinite(ms)) return "—";
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const totalSec = Math.round(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h) return `${h}h ${m}m`;
+  if (m) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+function durMs(r) {
+  if (typeof r.duration === "number") return r.duration < 10000 ? r.duration * 1000 : r.duration;
+  const start = safeDate(r.started_at);
+  const end = safeDate(r.finished_at);
+  if (!start || !end) return Number.POSITIVE_INFINITY;
+  return Math.max(0, end.getTime() - start.getTime());
+}
+
+function statusWeight(status) {
+  const s = String(status || "").toLowerCase();
+  if (s === "running") return 0;
+  if (s === "failed") return 1;
+  if (s === "passed") return 2;
+  return 3;
+}
+
+function normalizeFilterValue(v) {
+  if (v == null) return "";
+  const s = String(v).trim().toLowerCase();
+  return (s === "" || s === "all") ? "" : s;
+}
+
+function matchesQuery(r, q) {
+  if (!q) return true;
+  const needle = q.toLowerCase();
+  const bag = [r.run_id, r.suite, r.env, r.version, r.build_number, r.platform, r.status, r.started_at, r.finished_at]
+    .map(x => String(x ?? "").toLowerCase()).join(" ");
+  return bag.includes(needle);
+}
+
+function shortRunId(runId) {
+  const value = String(runId || "");
+  if (value.length <= 18) return value;
+  return `${value.slice(0, 10)}...${value.slice(-6)}`;
+}
+
+function badgeClass(prefix, value) {
+  return `${prefix}-${String(value || "unknown").trim().toLowerCase().replace(/\s+/g, "-") || "unknown"}`;
+}
+
+function tableBadge(type, value, iconHtml) {
+  return `<span class="table-badge table-badge-${type} ${badgeClass(`table-badge-${type}`, value)}">${iconHtml}<span>${escapeHtml(value || "unknown")}</span></span>`;
+}
+
+function versionBadge(value) {
+  return `<span class="table-badge table-badge-version">${iconVersion()}<span>${escapeHtml(value || "unknown")}</span></span>`;
+}
+
+function buildBadge(value) {
+  return `<span class="table-badge table-badge-build">${iconBuild()}<span>${escapeHtml(value || "unknown")}</span></span>`;
+}
+
+function updateCount(n) {
+  countLbl.textContent = `${n.toLocaleString()} run${n === 1 ? "" : "s"}`;
+}
+
+function compareRows(a, b) {
+  const aRunning = String(a.status || "").toLowerCase() === "running";
+  const bRunning = String(b.status || "").toLowerCase() === "running";
+  if (aRunning !== bRunning) return aRunning ? -1 : 1;
+  if (!sortCol) {
+    const at = safeDate(a.started_at)?.getTime() || 0;
+    const bt = safeDate(b.started_at)?.getTime() || 0;
+    return bt - at;
+  }
+
+  const th = document.querySelector(`thead th[data-col="${sortCol}"]`);
+  const type = th ? th.dataset.type : "string";
+  let cmp = 0;
+  switch (type) {
+    case "date": cmp = (safeDate(a[sortCol])?.getTime() || 0) - (safeDate(b[sortCol])?.getTime() || 0); break;
+    case "duration": cmp = durMs(a) - durMs(b); break;
+    case "status": cmp = statusWeight(a.status) - statusWeight(b.status); break;
+    default: cmp = String(a[sortCol] || "").localeCompare(String(b[sortCol] || ""), undefined, { numeric: true, sensitivity: "base" });
+  }
+  return cmp * sortDir;
+}
+
+function updateSortUi() {
+  document.querySelectorAll("thead th[data-col]").forEach(th => {
+    const active = th.dataset.col === sortCol;
+    th.classList.toggle("sort-active", active);
+    const arrow = th.querySelector(".sort-arrow");
+    if (arrow) {
+      arrow.classList.toggle("asc", active && sortDir === 1);
+      arrow.classList.toggle("desc", active && sortDir === -1);
+    }
+  });
+}
+
+function renderRows(items) {
+  if (!items.length) {
+    rows.innerHTML = '<tr class="empty-row"><td colspan="10">No runs match your filters.</td></tr>';
+    return;
+  }
+
+  rows.innerHTML = items.map(r => {
+    const status = String(r.status || "unknown").toLowerCase();
+    const isRunning = status === "running";
+    const statusClass = status === "passed" ? "status-passed" : status === "failed" ? "status-failed" : status === "running" ? "status-running" : "status-unknown";
+    const dur = isRunning ? "—" : formatDuration(durMs(r));
+    const viewerUrl = !isRunning && r.run_id ? buildReportViewerUrl(r) : "";
+    const reportLink = viewerUrl
+      ? `<a href="${escapeHtml(viewerUrl)}" class="report-link" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">${iconReport()} View</a>`
+      : '<span class="muted">—</span>';
+
+    return `<tr class="${viewerUrl ? 'clickable' : ''}" data-viewer="${escapeHtml(viewerUrl)}">
+      <td class="mono" title="${escapeHtml(r.run_id)}">${escapeHtml(shortRunId(r.run_id))}</td>
+      <td>${tableBadge("suite", r.suite, iconSuite())}</td>
+      <td>${tableBadge("env", r.env, iconEnvironment())}</td>
+      <td>${versionBadge(r.version)}</td>
+      <td>${buildBadge(r.build_number)}</td>
+      <td>${tableBadge("platform", r.platform, iconPlatform())}</td>
+      <td><span class="status-badge ${statusClass}"><span class="status-dot"></span>${escapeHtml(r.status || "unknown")}</span></td>
+      <td class="muted">${escapeHtml(r.started_at || "—")}</td>
+      <td class="mono">${dur}</td>
+      <td>${reportLink}</td>
+    </tr>`;
+  }).join('');
+}
+
+function renderPagination(totalPages) {
+  if (totalPages <= 1) {
+    pagination.innerHTML = "";
+    return;
+  }
+  const buttons = [];
+  buttons.push(`<button class="page-btn" data-page="${currentPage - 1}" ${currentPage === 1 ? "disabled" : ""}>‹</button>`);
+  if (totalPages <= 7) {
+    for (let i = 1; i <= totalPages; i++) buttons.push(`<button class="page-btn ${i === currentPage ? "active" : ""}" data-page="${i}">${i}</button>`);
+  } else {
+    buttons.push(`<button class="page-btn ${currentPage === 1 ? "active" : ""}" data-page="1">1</button>`);
+    if (currentPage > 3) buttons.push(`<span class="page-ellipsis">…</span>`);
+    const start = Math.max(2, currentPage - 1);
+    const end = Math.min(totalPages - 1, currentPage + 1);
+    for (let i = start; i <= end; i++) buttons.push(`<button class="page-btn ${i === currentPage ? "active" : ""}" data-page="${i}">${i}</button>`);
+    if (currentPage < totalPages - 2) buttons.push(`<span class="page-ellipsis">…</span>`);
+    buttons.push(`<button class="page-btn ${currentPage === totalPages ? "active" : ""}" data-page="${totalPages}">${totalPages}</button>`);
+  }
+  buttons.push(`<button class="page-btn" data-page="${currentPage + 1}" ${currentPage === totalPages ? "disabled" : ""}>›</button>`);
+  pagination.innerHTML = buttons.join("");
+}
+
+function applyClientFilter() {
+  const q = qInput.value.trim();
+  const suiteFilterLocal = normalizeFilterValue(suiteFilterValue);
+  const envFilterLocal = normalizeFilterValue(envFilterValue);
+  const platformFilterLocal = normalizeFilterValue(platformFilterValue);
+
+  const filtered = allRuns
+    .filter(r => !suiteFilterLocal || String(r?.suite ?? "").trim().toLowerCase() === suiteFilterLocal)
+    .filter(r => !envFilterLocal || String(r?.env ?? "").trim().toLowerCase() === envFilterLocal)
+    .filter(r => !platformFilterLocal || String(r?.platform ?? "").trim().toLowerCase() === platformFilterLocal)
+    .filter(r => matchesQuery(r, q))
+    .sort(compareRows);
+
+  const totalPages = Math.ceil(filtered.length / ITEMS_PER_PAGE);
+  if (currentPage > totalPages && totalPages > 0) currentPage = totalPages;
+  const startIdx = (currentPage - 1) * ITEMS_PER_PAGE;
+  const pageItems = filtered.slice(startIdx, startIdx + ITEMS_PER_PAGE);
+  renderRows(pageItems);
+  updateCount(filtered.length);
+  updateSortUi();
+  renderPagination(totalPages);
+  updateStatistics();
+}
+
+function requestFilterValue(kind, value) {
+  const normalized = normalizeFilterValue(value);
+  if (!normalized) return "all";
+
+  if (kind === "env") {
+    if (normalized === "production") return "prod";
+    if (normalized === "staging") return "stage";
+  }
+
+  if (kind === "platform") {
+    if (["white-label", "white label", "white_label"].includes(normalized)) return "whitelabel";
+  }
+
+  return normalized;
+}
+
+function buildParams({ refresh = false } = {}) {
+  const p = new URLSearchParams();
+
+  // Always send all three filter dimensions.
+  // The backend now interprets `all` safely inside one request by scanning narrow prefixes server-side.
+  p.set("suite", requestFilterValue("suite", suiteFilterValue));
+  p.set("env", requestFilterValue("env", envFilterValue));
+  p.set("platform", requestFilterValue("platform", platformFilterValue));
+
+  p.set("limit", "200");
+  p.set("since_hours", "12");
+  p.set("max_blobs", "200");
+  if (refresh) p.set("refresh", "1");
+  return p;
+}
+
+function setLoading(v, { preserveExisting = false } = {}) {
+  isLoading = v;
+  refreshBtn.disabled = v;
+  themeToggle.disabled = v;
+  if (v) {
+    refreshBtn.classList.add('loading');
+    const hasExistingData = allRuns.length > 0;
+    if (preserveExisting && hasExistingData) {
+      showStatsLoading(true);
+      showChartsLoading(true);
+      setTableRefreshing(true);
+    } else {
+      showStatsLoading(false);
+      showChartsLoading(false);
+      showTableInitialLoading();
+      setTableRefreshing(false);
+    }
+  } else {
+    refreshBtn.classList.remove('loading');
+    hideStatsLoading();
+    hideChartsLoading();
+    setTableRefreshing(false);
+  }
+}
+
+function setLastUpdatedNow() {
+  lastUpdated.style.display = "inline-block";
+  lastUpdated.textContent = "Updated " + new Date().toLocaleTimeString();
+}
+
+async function load({ preserveExisting = false, refresh = true } = {}) {
+  if (isLoading) return;
+  setLoading(true, { preserveExisting });
+  try {
+    const params = buildParams({ refresh });
+    const res = await fetch("/api/runs?" + params.toString());
+    if (!res.ok) throw new Error(`Failed loading runs: HTTP ${res.status}`);
+    const payload = await res.json();
+    allRuns = payload.items || [];
+    currentPage = 1;
+    applyClientFilter();
+    setLastUpdatedNow();
+  } catch (err) {
+    console.error("Fetch error:", err);
+    if (allRuns.length === 0) {
+      rows.innerHTML = '<tr class="empty-row"><td colspan="10">Failed loading runs. Try refreshing again.</td></tr>';
+      updateCount(0);
+    }
+  } finally {
+    setLoading(false, { preserveExisting });
+  }
+}
+
+// ─── Auto-poll: once per hour only ───
+let pollTimer = null;
+const POLL_INTERVAL_MS = 60 * 60 * 1000;
+
+function startPolling() {
+  stopPolling();
+  pollTimer = setInterval(() => {
+    if (isLoading) return;
+    load({ preserveExisting: true, refresh: true });
+  }, POLL_INTERVAL_MS);
+}
+
+function stopPolling() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = null;
+}
+
+// ─── Events ───
+document.querySelectorAll("thead th[data-col]").forEach(th => {
+  th.addEventListener("click", () => {
+    const col = th.dataset.col;
+    if (!col) return;
+    if (sortCol === col) sortDir *= -1;
+    else { sortCol = col; sortDir = -1; }
+    currentPage = 1;
+    applyClientFilter();
+  });
+});
+
+pagination.addEventListener("click", (e) => {
+  const btn = e.target.closest("button.page-btn");
+  if (!btn || btn.hasAttribute("disabled")) return;
+  const page = Number(btn.dataset.page);
+  if (!page || page === currentPage) return;
+  currentPage = page;
+  applyClientFilter();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+});
+
+rows.addEventListener("click", (e) => {
+  const tr = e.target.closest("tr.clickable");
+  if (!tr || !tr.dataset.viewer) return;
+  window.open(tr.dataset.viewer, "_blank", "noopener,noreferrer");
+});
+
+qInput.addEventListener("input", () => {
+  currentPage = 1;
+  applyClientFilter();
+});
+
+clearFiltersBtn.addEventListener("click", () => {
+  qInput.value = "";
+  suiteFilterValue = "";
+  envFilterValue = "";
+  platformFilterValue = "";
+  resetChipGroup(suiteFilter);
+  resetChipGroup(envFilter);
+  resetChipGroup(platformFilter);
+  currentPage = 1;
+  load({ preserveExisting: true, refresh: true });
+});
+
+refreshBtn.addEventListener("click", () => {
+  currentPage = 1;
+  load({ preserveExisting: true, refresh: true });
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) stopPolling();
+  else startPolling();
+});
+
+window.addEventListener("beforeunload", stopPolling);
+
+// ─── Initialize ───
+showStatsLoading(false);
+showChartsLoading(false);
+showTableInitialLoading();
+setTimeout(() => {
+  initCharts();
+  initStatsDrawer();
+  load({ preserveExisting: false, refresh: true }).then(startPolling);
+}, 100);

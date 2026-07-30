@@ -1,0 +1,165 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <title>AutomationHub</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+<div class="page-wrap">
+  <div class="card header-card">
+    <div class="header-top">
+      <div class="brand">
+        <div class="logo">AH</div>
+        <div>
+          <div class="brand-title">AutomationHub Reports</div>
+          <div class="brand-sub">Browse test runs by environment, platform and suite.</div>
+        </div>
+      </div>
+      <div class="header-actions">
+        <span id="lastUpdated" class="updated-chip" style="display:none"></span>
+        <button id="refreshBtn" class="btn btn-primary">
+          <span class="btn-text">Refresh</span>
+          <span class="btn-spinner" style="display:none;"><span class="spinner spinner-small"></span></span>
+        </button>
+        <button id="themeToggle" class="toggle" aria-label="Toggle dark mode">
+          <span class="toggle-knob"></span>
+        </button>
+      </div>
+    </div>
+
+    <div class="filters-panel">
+      <div class="filter-top-row">
+        <div class="field filter-search-wide">
+          <label class="field-label">Search runs</label>
+          <div class="input-wrap">
+            <svg class="input-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+              <circle cx="7" cy="7" r="4.5"/>
+              <line x1="10.5" y1="10.5" x2="14" y2="14"/>
+            </svg>
+            <input id="qInput" placeholder="Search run ID, status, version, build number..." />
+          </div>
+        </div>
+        <button id="clearFiltersBtn" type="button" class="btn clear-filters-btn">Clear filters</button>
+      </div>
+
+      <div class="filter-groups-row">
+        <div class="filter-group-card">
+          <div class="filter-group-label">Suite</div>
+          <div class="filter-chips" id="suiteFilter">
+            <button type="button" class="filter-chip active" data-value="">All</button>
+            <button type="button" class="filter-chip chip-suite-smoke" data-value="smoke">Smoke</button>
+            <button type="button" class="filter-chip chip-suite-regression" data-value="regression">Regression</button>
+            <button type="button" class="filter-chip chip-suite-bugs" data-value="bugs">Bugs</button>
+            <button type="button" class="filter-chip chip-suite-sanity" data-value="sanity">Sanity</button>
+          </div>
+        </div>
+
+        <div class="filter-group-card">
+          <div class="filter-group-label">Environment</div>
+          <div class="filter-chips" id="envFilter">
+            <button type="button" class="filter-chip active" data-value="">All</button>
+            <button type="button" class="filter-chip chip-env-qa" data-value="qa">QA</button>
+            <button type="button" class="filter-chip chip-env-stage" data-value="stage">Stage</button>
+            <button type="button" class="filter-chip chip-env-prod" data-value="prod">Production</button>
+          </div>
+        </div>
+
+        <div class="filter-group-card">
+          <div class="filter-group-label">Platform</div>
+          <div class="filter-chips" id="platformFilter">
+            <button type="button" class="filter-chip active" data-value="">All</button>
+            <button type="button" class="filter-chip chip-platform-web" data-value="web">Web</button>
+            <button type="button" class="filter-chip chip-platform-mobile" data-value="mobile">Mobile</button>
+            <button type="button" class="filter-chip chip-platform-whitelabel" data-value="whitelabel">White Label</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="stats-section" id="statsSection">
+    <button id="statsDrawerToggle" class="stats-drawer-toggle" type="button" aria-expanded="true" aria-controls="statsDrawerContent">
+      <span class="stats-drawer-title">
+        <span class="stats-drawer-kicker">Overview</span>
+        <span class="stats-drawer-main">Dashboard statistics</span>
+      </span>
+      <span class="stats-drawer-action">
+        <span id="statsDrawerLabel">Collapse</span>
+        <svg class="stats-drawer-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <polyline points="4,6 8,10 12,6"></polyline>
+        </svg>
+      </span>
+    </button>
+
+    <div class="stats-drawer-content" id="statsDrawerContent">
+    <div class="stats-cards">
+      <div class="stat-card card">
+        <div class="stat-label">Total Runs</div>
+        <div class="stat-value" id="statTotal">0</div>
+        <div class="stat-subtitle" id="statTotalSub">Last 12 hours</div>
+        <div class="loading-overlay"><div class="spinner"></div></div>
+      </div>
+      <div class="stat-card card">
+        <div class="stat-label">Pass Rate</div>
+        <div class="stat-value" id="statPassRate">0%</div>
+        <div class="stat-subtitle" id="statPassRateSub">0 passed / 0 total</div>
+        <div class="loading-overlay"><div class="spinner"></div></div>
+      </div>
+      <div class="stat-card card">
+        <div class="stat-label">Running</div>
+        <div class="stat-value" id="statRunning">0</div>
+        <div class="stat-subtitle">Currently in progress</div>
+        <div class="loading-overlay"><div class="spinner"></div></div>
+      </div>
+      <div class="stat-card card">
+        <div class="stat-label">Avg Duration</div>
+        <div class="stat-value" id="statAvgDuration">--</div>
+        <div class="stat-subtitle">Completed runs</div>
+        <div class="loading-overlay"><div class="spinner"></div></div>
+      </div>
+    </div>
+
+    <div class="charts-grid">
+      <div class="chart-card card"><div class="chart-title">Status Distribution</div><div class="chart-wrap"><canvas id="chartStatus"></canvas></div><div class="loading-overlay"><div class="spinner"></div></div></div>
+      <div class="chart-card card"><div class="chart-title">Suite Distribution</div><div class="chart-wrap"><canvas id="chartSuite"></canvas></div><div class="loading-overlay"><div class="spinner"></div></div></div>
+      <div class="chart-card card"><div class="chart-title">Environment Distribution</div><div class="chart-wrap"><canvas id="chartEnv"></canvas></div><div class="loading-overlay"><div class="spinner"></div></div></div>
+      <div class="chart-card card"><div class="chart-title">Platform Distribution</div><div class="chart-wrap"><canvas id="chartPlatform"></canvas></div><div class="loading-overlay"><div class="spinner"></div></div></div>
+    </div>
+    </div>
+  </div>
+
+  <div class="card table-card" id="tableCard">
+    <div class="table-loading-overlay" id="tableOverlay" aria-hidden="true"><div class="spinner" role="status" aria-label="Loading"></div></div>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th data-col="run_id" data-type="string"><span class="th-inner">Run ID<svg class="sort-arrow desc" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="2,4 6,8 10,4"/></svg></span></th>
+            <th data-col="suite" data-type="string"><span class="th-inner">Suite<svg class="sort-arrow desc" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="2,4 6,8 10,4"/></svg></span></th>
+            <th data-col="env" data-type="string"><span class="th-inner">Env<svg class="sort-arrow desc" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="2,4 6,8 10,4"/></svg></span></th>
+            <th data-col="version" data-type="string"><span class="th-inner">Version<svg class="sort-arrow desc" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="2,4 6,8 10,4"/></svg></span></th>
+            <th data-col="build_number" data-type="string"><span class="th-inner">Build #<svg class="sort-arrow desc" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="2,4 6,8 10,4"/></svg></span></th>
+            <th data-col="platform" data-type="string"><span class="th-inner">Platform<svg class="sort-arrow desc" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="2,4 6,8 10,4"/></svg></span></th>
+            <th data-col="status" data-type="status"><span class="th-inner">Status<svg class="sort-arrow desc" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="2,4 6,8 10,4"/></svg></span></th>
+            <th data-col="started_at" data-type="date"><span class="th-inner">Started<svg class="sort-arrow desc" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="2,4 6,8 10,4"/></svg></span></th>
+            <th data-col="duration" data-type="duration"><span class="th-inner">Duration<svg class="sort-arrow desc" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="2,4 6,8 10,4"/></svg></span></th>
+            <th>Report</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="footer-bar">
+    <span id="countLbl" class="count-lbl"></span>
+    <div id="pagination" class="pagination"></div>
+  </div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

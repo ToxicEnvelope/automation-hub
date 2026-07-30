@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <title>AutomationHub Report Viewer</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="stylesheet" href="/static/report-viewer.css" />
+</head>
+<body>
+<div class="viewer-page-wrap">
+  <div class="card viewer-header-card">
+    <div class="viewer-header-top">
+      <div class="brand">
+        <div class="logo">AH</div>
+        <div>
+          <div class="brand-title">AutomationHub Report Viewer</div>
+          <div id="viewerSub" class="brand-sub">Loading report context...</div>
+        </div>
+      </div>
+      <div class="viewer-actions">
+        <a id="backLink" class="btn" href="/" target="_self">Dashboard</a>
+        <a id="openOriginalBtn" class="btn" href="#" target="_blank" rel="noopener noreferrer" aria-disabled="true">Open original report</a>
+        <button id="themeToggle" class="toggle" aria-label="Toggle dark mode">
+          <span class="toggle-knob"></span>
+        </button>
+      </div>
+    </div>
+
+    <div class="viewer-meta-grid" aria-live="polite">
+      <div class="viewer-meta-card">
+        <span class="viewer-meta-label">Run ID</span>
+        <span id="metaRunId" class="viewer-meta-value mono">—</span>
+      </div>
+      <div class="viewer-meta-card">
+        <span class="viewer-meta-label">Suite</span>
+        <span id="metaSuite" class="viewer-meta-value">—</span>
+      </div>
+      <div class="viewer-meta-card">
+        <span class="viewer-meta-label">Environment</span>
+        <span id="metaEnv" class="viewer-meta-value">—</span>
+      </div>
+      <div class="viewer-meta-card">
+        <span class="viewer-meta-label">Platform</span>
+        <span id="metaPlatform" class="viewer-meta-value">—</span>
+      </div>
+      <div class="viewer-meta-card">
+        <span class="viewer-meta-label">Status</span>
+        <span id="metaStatus" class="viewer-meta-value">—</span>
+      </div>
+    </div>
+  </div>
+
+  <div id="viewerError" class="card viewer-error" style="display:none"></div>
+
+  <div class="viewer-layout">
+    <section class="card report-frame-card">
+      <div class="viewer-section-head">
+        <div>
+          <div class="viewer-section-title">Allure report</div>
+          <div class="viewer-section-sub">Public Blob report embedded inside AutomationHub.</div>
+        </div>
+      </div>
+      <div id="frameLoading" class="frame-loading">
+        <span class="spinner spinner-small"></span>
+        Loading report iframe...
+      </div>
+      <iframe
+        id="reportFrame"
+        title="Allure report"
+        referrerpolicy="no-referrer"
+        sandbox="allow-scripts allow-same-origin allow-popups allow-forms allow-downloads"
+      ></iframe>
+    </section>
+
+    <aside class="card ai-agent-card">
+      <div class="viewer-section-head ai-section-head">
+        <div>
+          <div class="viewer-section-title">AI Failure Agent</div>
+          <div id="aiSub" class="viewer-section-sub">Reads Blob artifacts server-side, not the iframe DOM.</div>
+        </div>
+        <span id="cacheBadge" class="ai-cache-badge" style="display:none">cached</span>
+      </div>
+
+      <div id="testSelectorWrap" class="ai-test-selector" style="display:none">
+        <label for="testSelect">Selected test for AI analysis</label>
+        <select id="testSelect"></select>
+        <div id="testSelectorHint" class="viewer-section-sub">Choose the exact failed test case to analyze.</div>
+      </div>
+
+      <div id="aiLoading" class="ai-loading">
+        <span class="spinner spinner-small"></span>
+        Running AI Failure Agent on selected test evidence...
+      </div>
+
+      <div id="aiContent" class="ai-content" style="display:none">
+        <div class="ai-summary-title-row">
+          <h1 id="summaryTitle" class="ai-title">—</h1>
+          <span id="summaryCategory" class="ai-category">—</span>
+        </div>
+
+        <div class="ai-confidence-row">
+          <span class="viewer-meta-label">Confidence</span>
+          <span id="summaryConfidence" class="ai-confidence">—</span>
+        </div>
+
+        <div class="ai-block">
+          <h2>Failure cause</h2>
+          <p id="shortSummary">—</p>
+        </div>
+
+        <div class="ai-block">
+          <h2>Evidence-based cause</h2>
+          <p id="rootCause">—</p>
+        </div>
+
+        <div class="ai-block">
+          <h2>Suggested fix</h2>
+          <p id="suggestedFix">—</p>
+          <ul id="suggestedFixSteps" class="ai-steps"></ul>
+        </div>
+
+        <div class="ai-block">
+          <h2>Similar previous failures</h2>
+          <p id="historicalInsight">—</p>
+          <div id="historyList" class="history-list"></div>
+        </div>
+
+        <div class="ai-block">
+          <h2>Selected test evidence</h2>
+          <div id="evidenceList" class="evidence-list"></div>
+        </div>
+
+        <div id="providerWarning" class="ai-warning" style="display:none"></div>
+      </div>
+
+      <div id="modelProbeStatus" class="ai-probe-status" style="display:none"></div>
+      <div id="aiError" class="ai-error" style="display:none"></div>
+
+      <div class="ai-actions">
+        <button id="regenerateBtn" type="button" class="btn btn-primary">Regenerate</button>
+        <button id="modelProbeBtn" type="button" class="btn">Test model</button>
+        <button id="copyBtn" type="button" class="btn">Copy analysis</button>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<script src="/static/report-viewer.js"></script>
+</body>
+</html>
