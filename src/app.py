@@ -26,6 +26,7 @@ from src.utils.vars import BASE_DIR, REPORTS_CONTAINER
 from src.ai_summary import get_report_context, get_or_create_report_summary, list_report_failures
 from src.ai_agent import get_or_create_test_agent_analysis, save_test_agent_feedback
 from src.ai_provider import provider_status, run_provider_probe
+from src.failure_chat import ask_failure_chat
 from src.test_statistics import aggregate_test_statistics
 
 # -------------------- Paths --------------------
@@ -264,6 +265,24 @@ class TestAgentFeedbackRequest(BaseModel):
     inference_id: Optional[str] = None
     evidence_hash: Optional[str] = None
     provider: Optional[str] = None
+
+
+class FailureChatHistoryMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=1200)
+
+
+class FailureChatRequest(BaseModel):
+    suite: str
+    env: str
+    platform: str
+    run_id: str
+    question: str = Field(min_length=1, max_length=1500)
+    conversation_id: Optional[str] = Field(default=None, max_length=80)
+    test_id: Optional[str] = None
+    test_blob: Optional[str] = None
+    test_name: Optional[str] = None
+    history: List[FailureChatHistoryMessage] = Field(default_factory=list, max_length=8)
 
 
 class TestStatisticsRunRequest(BaseModel):
@@ -563,6 +582,31 @@ def ai_test_agent_analysis(body: TestAgentAnalysisRequest) -> JSONResponse:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
     except Exception as exc:
         return JSONResponse({"ok": False, "error": f"Failed generating AI agent analysis: {exc}"}, status_code=500)
+
+    return JSONResponse(payload, status_code=status.HTTP_200_OK)
+
+
+@public_api.post("/ai/failure-chat", response_class=JSONResponse)
+def ai_failure_chat(body: FailureChatRequest) -> JSONResponse:
+    """Answer a grounded question about one selected failed Allure test."""
+    try:
+        payload = ask_failure_chat(
+            blob_client(),
+            suite=body.suite,
+            env=body.env,
+            platform=body.platform,
+            run_id=body.run_id,
+            question=body.question,
+            selected_test_id=body.test_id,
+            selected_test_blob=body.test_blob,
+            selected_test_name=body.test_name,
+            conversation_id=body.conversation_id,
+            history=[item.model_dump() for item in body.history],
+        )
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": f"Failed answering AI chat question: {exc}"}, status_code=500)
 
     return JSONResponse(payload, status_code=status.HTTP_200_OK)
 

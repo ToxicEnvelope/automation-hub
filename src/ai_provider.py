@@ -307,6 +307,9 @@ def _load_embedded_llama_cpp_model(cfg: AIProviderConfig) -> Any:
 def embedded_llama_cpp_chat(
     messages: List[Dict[str, str]],
     cfg: Optional[AIProviderConfig] = None,
+    *,
+    response_schema: Optional[Dict[str, Any]] = None,
+    max_tokens: Optional[int] = None,
 ) -> Tuple[Optional[Dict[str, Any]], str, Dict[str, Any]]:
     cfg = cfg or get_provider_config()
     llm = _load_embedded_llama_cpp_model(cfg)
@@ -315,10 +318,10 @@ def embedded_llama_cpp_chat(
     completion_kwargs: Dict[str, Any] = {
         "messages": messages,
         "temperature": cfg.temperature,
-        "max_tokens": cfg.max_tokens,
+        "max_tokens": int(max_tokens or cfg.max_tokens),
         "response_format": {
             "type": "json_object",
-            "schema": _AGENT_RESPONSE_SCHEMA,
+            "schema": response_schema or _AGENT_RESPONSE_SCHEMA,
         },
     }
     response_format_mode = "json_schema"
@@ -376,10 +379,14 @@ def embedded_llama_cpp_chat(
     return parsed, raw, diagnostics
 
 
-def call_llm_json(
+
+def call_llm_json_schema(
     messages: List[Dict[str, str]],
+    *,
+    response_schema: Dict[str, Any],
+    max_tokens: Optional[int] = None,
 ) -> Tuple[Optional[Dict[str, Any]], str, Optional[str], Dict[str, Any]]:
-    """Return (parsed_json, provider_used, warning, inference_diagnostics)."""
+    """Invoke the configured provider and return arbitrary schema-constrained JSON."""
     cfg = get_provider_config()
     base_diagnostics: Dict[str, Any] = {
         "source": "heuristic",
@@ -392,6 +399,7 @@ def call_llm_json(
         "usage": {},
         "elapsed_ms": None,
         "response_format_used": False,
+        "response_format_mode": "none",
         "inference_id": uuid.uuid4().hex,
     }
 
@@ -400,10 +408,16 @@ def call_llm_json(
 
     if cfg.provider == "embedded_llama_cpp":
         try:
-            parsed, raw, diagnostics = embedded_llama_cpp_chat(messages, cfg)
+            parsed, raw, diagnostics = embedded_llama_cpp_chat(
+                messages,
+                cfg,
+                response_schema=response_schema,
+                max_tokens=max_tokens,
+            )
             if parsed:
-                return normalize_agent_payload(parsed), "embedded_llama_cpp", None, diagnostics
-            warning = "Embedded model returned non-JSON output; heuristic fallback was used."
+                return parsed, "embedded_llama_cpp", None, diagnostics
+
+            warning = "Embedded model returned non-JSON output; deterministic fallback was used."
             diagnostics["source"] = "heuristic_fallback"
             diagnostics["failure"] = "non_json_model_output"
             diagnostics["raw_response_preview"] = raw[:500]
@@ -439,9 +453,21 @@ def call_llm_json(
     return (
         None,
         "heuristic_fallback",
-        f"Unsupported AI_PROVIDER={cfg.provider}; heuristic fallback was used.",
+        f"Unsupported AI_PROVIDER={cfg.provider}; deterministic fallback was used.",
         diagnostics,
     )
+
+def call_llm_json(
+    messages: List[Dict[str, str]],
+) -> Tuple[Optional[Dict[str, Any]], str, Optional[str], Dict[str, Any]]:
+    """Return the normalized AutomationHub Failure Agent response."""
+    parsed, provider_used, warning, diagnostics = call_llm_json_schema(
+        messages,
+        response_schema=_AGENT_RESPONSE_SCHEMA,
+    )
+    if parsed:
+        return normalize_agent_payload(parsed), provider_used, warning, diagnostics
+    return None, provider_used, warning, diagnostics
 
 
 def run_provider_probe() -> Dict[str, Any]:
@@ -479,8 +505,22 @@ def run_provider_probe() -> Dict[str, Any]:
         },
     ]
 
+    probe_schema = {
+        "type": "object",
+        "properties": {
+            "probe_token": {"type": "string"},
+            "status": {"type": "string", "enum": ["ok"]},
+        },
+        "required": ["probe_token", "status"],
+    }
+
     try:
-        parsed, raw, diagnostics = embedded_llama_cpp_chat(messages, cfg)
+        parsed, raw, diagnostics = embedded_llama_cpp_chat(
+            messages,
+            cfg,
+            response_schema=probe_schema,
+            max_tokens=120,
+        )
     except Exception as exc:
         return {
             "ok": False,
