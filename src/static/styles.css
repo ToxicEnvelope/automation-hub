@@ -362,7 +362,7 @@
 
     .stats-drawer-content {
       overflow: hidden;
-      max-height: 900px;
+      max-height: 1400px;
       opacity: 1;
       transition: max-height .28s ease, opacity .2s ease, margin .2s ease;
     }
@@ -1381,4 +1381,38 @@ td.run-id-cell {
 }
 .table-card.is-loading .table-loading-overlay {
   display: flex;
+}
+
+/* ─── Test-level dashboard charts ─── */
+.chart-subtitle {
+  margin: -7px 0 10px;
+  color: var(--text-tertiary);
+  font-size: 11.5px;
+  line-height: 1.35;
+  flex-shrink: 0;
+}
+
+.chart-card-wide {
+  grid-column: span 2;
+  height: 320px;
+}
+
+.test-statistics-card.is-empty .chart-wrap::after {
+  content: "No test-level Allure data available";
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  color: var(--text-tertiary);
+  font-size: 13px;
+  text-align: center;
+  pointer-events: none;
+}
+
+@media (max-width: 920px) {
+  .chart-card-wide {
+    grid-column: span 1;
+  }
 }

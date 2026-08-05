@@ -21,6 +21,10 @@ const statPassRate = document.getElementById("statPassRate");
 const statPassRateSub = document.getElementById("statPassRateSub");
 const statRunning = document.getElementById("statRunning");
 const statAvgDuration = document.getElementById("statAvgDuration");
+const testOutcomeMeta = document.getElementById("testOutcomeMeta");
+const topFailedTestsMeta = document.getElementById("topFailedTestsMeta");
+const testOutcomeCard = document.getElementById("testOutcomeCard");
+const topFailedTestsCard = document.getElementById("topFailedTestsCard");
 
 let isLoading = false;
 let allRuns = [];
@@ -31,7 +35,8 @@ let suiteFilterValue = "";
 let envFilterValue = "";
 let platformFilterValue = "";
 const ITEMS_PER_PAGE = 25;
-let chartStatus, chartSuite, chartEnv, chartPlatform;
+let chartStatus, chartSuite, chartEnv, chartPlatform, chartTestStatus, chartTopFailedTests;
+let currentTestStatistics = null;
 
 // ─── Stats drawer ───
 const STATS_DRAWER_KEY = "ah-stats-collapsed";
@@ -55,7 +60,14 @@ function initStatsDrawer() {
     // When reopening, force Chart.js to recalculate dimensions after the drawer animation.
     if (collapsed) {
       setTimeout(() => {
-        [chartStatus, chartSuite, chartEnv, chartPlatform].forEach(chart => chart?.resize?.());
+        [
+          chartStatus,
+          chartSuite,
+          chartEnv,
+          chartPlatform,
+          chartTestStatus,
+          chartTopFailedTests,
+        ].forEach(chart => chart?.resize?.());
       }, 320);
     }
   });
@@ -130,6 +142,7 @@ function getChartColors() {
   return {
     passed: isDark ? "#86efac" : "#16a34a",
     failed: isDark ? "#fca5a5" : "#dc2626",
+    error: isDark ? "#fdba74" : "#ea580c",
     running: isDark ? "#93c5fd" : "#3b82f6",
     other: isDark ? "#fde047" : "#eab308",
     text: isDark ? "#e5e7eb" : "#4b5563"
@@ -142,19 +155,145 @@ function initCharts() {
   const commonOptions = {
     responsive: true,
     maintainAspectRatio: false,
-    plugins: { legend: { position: 'bottom', labels: { color: colors.text, padding: 12, font: { size: 11 } } } }
+    plugins: {
+      legend: {
+        position: 'bottom',
+        labels: { color: colors.text, padding: 12, font: { size: 11 } },
+      },
+    },
   };
 
   const c1 = document.getElementById('chartStatus');
   const c2 = document.getElementById('chartSuite');
   const c3 = document.getElementById('chartEnv');
   const c4 = document.getElementById('chartPlatform');
-  if (!c1 || !c2 || !c3 || !c4) return;
+  const c5 = document.getElementById('chartTestStatus');
+  const c6 = document.getElementById('chartTopFailedTests');
 
-  chartStatus = new Chart(c1, { type: 'doughnut', data: { labels: [], datasets: [{ data: [], backgroundColor: [], borderWidth: 0 }] }, options: commonOptions });
-  chartSuite = new Chart(c2, { type: 'doughnut', data: { labels: [], datasets: [{ data: [], backgroundColor: ['#4f46e5', '#06b6d4', '#10b981'], borderWidth: 0 }] }, options: commonOptions });
-  chartEnv = new Chart(c3, { type: 'doughnut', data: { labels: [], datasets: [{ data: [], backgroundColor: ['#10b981', '#f59e0b', '#ef4444'], borderWidth: 0 }] }, options: commonOptions });
-  chartPlatform = new Chart(c4, { type: 'doughnut', data: { labels: [], datasets: [{ data: [], backgroundColor: ['#3b82f6', '#ec4899', '#a855f7'], borderWidth: 0 }] }, options: commonOptions });
+  if (c1) {
+    chartStatus = new Chart(c1, {
+      type: 'doughnut',
+      data: { labels: [], datasets: [{ data: [], backgroundColor: [], borderWidth: 0 }] },
+      options: commonOptions,
+    });
+  }
+  if (c2) {
+    chartSuite = new Chart(c2, {
+      type: 'doughnut',
+      data: { labels: [], datasets: [{ data: [], backgroundColor: ['#4f46e5', '#06b6d4', '#10b981'], borderWidth: 0 }] },
+      options: commonOptions,
+    });
+  }
+  if (c3) {
+    chartEnv = new Chart(c3, {
+      type: 'doughnut',
+      data: { labels: [], datasets: [{ data: [], backgroundColor: ['#10b981', '#f59e0b', '#ef4444'], borderWidth: 0 }] },
+      options: commonOptions,
+    });
+  }
+  if (c4) {
+    chartPlatform = new Chart(c4, {
+      type: 'doughnut',
+      data: { labels: [], datasets: [{ data: [], backgroundColor: ['#3b82f6', '#ec4899', '#a855f7'], borderWidth: 0 }] },
+      options: commonOptions,
+    });
+  }
+  if (c5) {
+    chartTestStatus = new Chart(c5, {
+      type: 'bar',
+      data: {
+        labels: [],
+        datasets: [
+          { label: 'Passed', data: [], backgroundColor: colors.passed, borderWidth: 0, borderRadius: 5 },
+          { label: 'Failed', data: [], backgroundColor: colors.failed, borderWidth: 0, borderRadius: 5 },
+          { label: 'Error', data: [], backgroundColor: colors.error, borderWidth: 0, borderRadius: 5 },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        indexAxis: 'y',
+        plugins: {
+          legend: {
+            position: 'bottom',
+            labels: { color: colors.text, padding: 12, font: { size: 11 } },
+          },
+        },
+        scales: {
+          x: {
+            beginAtZero: true,
+            stacked: true,
+            ticks: { color: colors.text, precision: 0 },
+            grid: { color: 'rgba(148, 163, 184, 0.16)' },
+            title: { display: true, text: 'Occurrences', color: colors.text },
+          },
+          y: {
+            stacked: true,
+            ticks: {
+              color: colors.text,
+              autoSkip: false,
+              callback(value) {
+                const label = this.getLabelForValue(value);
+                return label.length > 52 ? `${label.slice(0, 49)}…` : label;
+              },
+            },
+            grid: { display: false },
+          },
+        },
+      },
+    });
+  }
+  if (c6) {
+    chartTopFailedTests = new Chart(c6, {
+      type: 'bar',
+      data: {
+        labels: [],
+        datasets: [
+          { label: 'Failed', data: [], backgroundColor: colors.failed, borderWidth: 0, borderRadius: 5 },
+          { label: 'Error', data: [], backgroundColor: colors.error, borderWidth: 0, borderRadius: 5 },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        indexAxis: 'y',
+        plugins: {
+          legend: {
+            position: 'bottom',
+            labels: { color: colors.text, padding: 12, font: { size: 11 } },
+          },
+          tooltip: {
+            callbacks: {
+              title(items) {
+                return items?.[0]?.label || '';
+              },
+            },
+          },
+        },
+        scales: {
+          x: {
+            beginAtZero: true,
+            stacked: true,
+            ticks: { color: colors.text, precision: 0 },
+            grid: { color: 'rgba(148, 163, 184, 0.16)' },
+            title: { display: true, text: 'Occurrences', color: colors.text },
+          },
+          y: {
+            stacked: true,
+            ticks: {
+              color: colors.text,
+              autoSkip: false,
+              callback(value) {
+                const label = this.getLabelForValue(value);
+                return label.length > 52 ? `${label.slice(0, 49)}…` : label;
+              },
+            },
+            grid: { display: false },
+          },
+        },
+      },
+    });
+  }
 }
 
 function updateChart(chart, counts, colorMap) {
@@ -164,6 +303,115 @@ function updateChart(chart, counts, colorMap) {
   chart.data.datasets[0].data = entries.map(([, v]) => v);
   if (colorMap) chart.data.datasets[0].backgroundColor = entries.map(([k]) => colorMap[k] || colorMap.unknown);
   chart.update('none');
+}
+
+
+function setTestStatisticsLoading(value) {
+  [testOutcomeCard, topFailedTestsCard].forEach(card => {
+    if (!card) return;
+    card.querySelector('.loading-overlay')?.classList.toggle('active', value);
+  });
+}
+
+function updateTestStatisticsCharts(payload) {
+  currentTestStatistics = payload || null;
+  const counts = payload?.status_counts || {};
+  const outcomes = Array.isArray(payload?.test_outcomes_by_name) ? payload.test_outcomes_by_name : [];
+  const topFailed = Array.isArray(payload?.top_failed_tests) ? payload.top_failed_tests : [];
+  const meta = payload?.meta || {};
+  const colors = getChartColors();
+
+  const passed = Number(counts.passed || 0);
+  const failed = Number(counts.failed || 0);
+  const error = Number(counts.error || 0);
+  const totalVisible = passed + failed + error;
+
+  testOutcomeCard?.classList.toggle('is-empty', outcomes.length === 0);
+  topFailedTestsCard?.classList.toggle('is-empty', topFailed.length === 0);
+
+  if (chartTestStatus) {
+    chartTestStatus.data.labels = outcomes.map(item => item.test_name || 'Unknown test');
+    chartTestStatus.data.datasets[0].data = outcomes.map(item => Number(item.passed || 0));
+    chartTestStatus.data.datasets[0].backgroundColor = colors.passed;
+    chartTestStatus.data.datasets[1].data = outcomes.map(item => Number(item.failed || 0));
+    chartTestStatus.data.datasets[1].backgroundColor = colors.failed;
+    chartTestStatus.data.datasets[2].data = outcomes.map(item => Number(item.error || 0));
+    chartTestStatus.data.datasets[2].backgroundColor = colors.error;
+    chartTestStatus.options.plugins.legend.labels.color = colors.text;
+    chartTestStatus.options.scales.x.ticks.color = colors.text;
+    chartTestStatus.options.scales.x.title.color = colors.text;
+    chartTestStatus.options.scales.y.ticks.color = colors.text;
+    chartTestStatus.update('none');
+  }
+
+  if (chartTopFailedTests) {
+    chartTopFailedTests.data.labels = topFailed.map(item => item.test_name || 'Unknown test');
+    chartTopFailedTests.data.datasets[0].data = topFailed.map(item => Number(item.failed || 0));
+    chartTopFailedTests.data.datasets[0].backgroundColor = colors.failed;
+    chartTopFailedTests.data.datasets[1].data = topFailed.map(item => Number(item.error || 0));
+    chartTopFailedTests.data.datasets[1].backgroundColor = colors.error;
+    chartTopFailedTests.options.plugins.legend.labels.color = colors.text;
+    chartTopFailedTests.options.scales.x.ticks.color = colors.text;
+    chartTopFailedTests.options.scales.x.title.color = colors.text;
+    chartTopFailedTests.options.scales.y.ticks.color = colors.text;
+    chartTopFailedTests.update('none');
+  }
+
+  const testCount = Number(meta.test_cases_scanned || 0);
+  const runCount = Number(meta.runs_with_test_data || 0);
+  const truncated = meta.truncated ? ' · bounded scan' : '';
+  if (testOutcomeMeta) {
+    testOutcomeMeta.textContent = testCount > 0
+      ? `${testCount.toLocaleString()} cases · ${passed.toLocaleString()} passed · ${failed.toLocaleString()} failed · ${error.toLocaleString()} errors · ${runCount.toLocaleString()} run${runCount === 1 ? '' : 's'}${truncated}`
+      : 'No test-level Allure data was found in the loaded runs';
+  }
+  if (topFailedTestsMeta) {
+    topFailedTestsMeta.textContent = topFailed.length
+      ? `Ranked by failed + error occurrences across ${runCount.toLocaleString()} run${runCount === 1 ? '' : 's'}`
+      : 'No failed or error test cases were found';
+  }
+}
+
+async function loadTestStatistics() {
+  const completedRuns = allRuns
+    .filter(run => String(run.status || '').toLowerCase() !== 'running')
+    .slice(0, 100)
+    .map(run => ({
+      suite: run.suite,
+      env: run.env,
+      platform: run.platform,
+      run_id: run.run_id,
+    }));
+
+  if (!completedRuns.length) {
+    updateTestStatisticsCharts({ status_counts: {}, test_outcomes_by_name: [], top_failed_tests: [], meta: {} });
+    return;
+  }
+
+  setTestStatisticsLoading(true);
+  try {
+    const response = await fetch('/api/test-statistics', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        runs: completedRuns,
+        max_runs: 100,
+        max_test_cases: 5000,
+      }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.error || `Failed loading test statistics: HTTP ${response.status}`);
+    }
+    updateTestStatisticsCharts(payload);
+  } catch (error) {
+    console.error('Test statistics error:', error);
+    updateTestStatisticsCharts({ status_counts: {}, test_outcomes_by_name: [], top_failed_tests: [], meta: {} });
+    if (testOutcomeMeta) testOutcomeMeta.textContent = 'Test-level statistics could not be loaded';
+    if (topFailedTestsMeta) topFailedTestsMeta.textContent = 'Top failed tests could not be loaded';
+  } finally {
+    setTestStatisticsLoading(false);
+  }
 }
 
 function updateStatistics() {
@@ -230,6 +478,7 @@ themeToggle.addEventListener("click", () => {
   const dark = document.documentElement.classList.contains("dark");
   localStorage.setItem("ah-theme", dark ? "dark" : "light");
   if (chartStatus) updateStatistics();
+  if (currentTestStatistics) updateTestStatisticsCharts(currentTestStatistics);
 });
 
 // ─── Filter chips ───
@@ -567,6 +816,7 @@ async function load({ preserveExisting = false, refresh = true } = {}) {
     currentPage = 1;
     applyClientFilter();
     setLastUpdatedNow();
+    await loadTestStatistics();
   } catch (err) {
     console.error("Fetch error:", err);
     if (allRuns.length === 0) {

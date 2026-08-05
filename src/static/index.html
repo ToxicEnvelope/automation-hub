@@ -123,10 +123,18 @@
     </div>
 
     <div class="charts-grid">
-      <div class="chart-card card"><div class="chart-title">Status Distribution</div><div class="chart-wrap"><canvas id="chartStatus"></canvas></div><div class="loading-overlay"><div class="spinner"></div></div></div>
-      <div class="chart-card card"><div class="chart-title">Suite Distribution</div><div class="chart-wrap"><canvas id="chartSuite"></canvas></div><div class="loading-overlay"><div class="spinner"></div></div></div>
-      <div class="chart-card card"><div class="chart-title">Environment Distribution</div><div class="chart-wrap"><canvas id="chartEnv"></canvas></div><div class="loading-overlay"><div class="spinner"></div></div></div>
-      <div class="chart-card card"><div class="chart-title">Platform Distribution</div><div class="chart-wrap"><canvas id="chartPlatform"></canvas></div><div class="loading-overlay"><div class="spinner"></div></div></div>
+      <div class="chart-card chart-card-wide card test-statistics-card" id="testOutcomeCard">
+        <div class="chart-title">Test Outcomes by Name</div>
+        <div class="chart-subtitle" id="testOutcomeMeta">Passed, failed, and error occurrences for the most observed tests</div>
+        <div class="chart-wrap"><canvas id="chartTestStatus"></canvas></div>
+        <div class="loading-overlay"><div class="spinner"></div></div>
+      </div>
+      <div class="chart-card chart-card-wide card test-statistics-card" id="topFailedTestsCard">
+        <div class="chart-title">Top 5 Most Failed Tests</div>
+        <div class="chart-subtitle" id="topFailedTestsMeta">Failure and error counts grouped by test name</div>
+        <div class="chart-wrap"><canvas id="chartTopFailedTests"></canvas></div>
+        <div class="loading-overlay"><div class="spinner"></div></div>
+      </div>
     </div>
     </div>
   </div>

@@ -132,6 +132,38 @@
           <div id="evidenceList" class="evidence-list"></div>
         </div>
 
+        <div id="feedbackPanel" class="ai-block ai-feedback-panel">
+          <div class="feedback-heading">
+            <div>
+              <h2>Review this analysis</h2>
+              <p>Human review controls whether this diagnosis can influence future AI memory.</p>
+            </div>
+            <span id="feedbackStateBadge" class="feedback-state-badge">Not reviewed</span>
+          </div>
+
+          <div class="feedback-verdicts" role="group" aria-label="AI analysis feedback">
+            <button type="button" class="feedback-verdict" data-feedback="helpful">Helpful</button>
+            <button type="button" class="feedback-verdict" data-feedback="partially_correct">Partially correct</button>
+            <button type="button" class="feedback-verdict" data-feedback="incorrect">Incorrect</button>
+          </div>
+
+          <div id="feedbackCorrectionFields" class="feedback-correction-fields" style="display:none">
+            <label for="actualCause">Actual cause</label>
+            <textarea id="actualCause" rows="3" maxlength="2000" placeholder="Enter the verified cause when the AI diagnosis needs correction."></textarea>
+
+            <label for="actualFix">Actual fix</label>
+            <textarea id="actualFix" rows="3" maxlength="2000" placeholder="Enter the fix that resolved or should resolve the failure."></textarea>
+          </div>
+
+          <label class="feedback-notes-label" for="feedbackNotes">Review notes</label>
+          <textarea id="feedbackNotes" rows="2" maxlength="2000" placeholder="Optional evidence or reviewer notes."></textarea>
+
+          <div class="feedback-save-row">
+            <button id="saveFeedbackBtn" type="button" class="btn btn-primary" disabled>Save feedback</button>
+            <span id="feedbackSaveStatus" class="feedback-save-status" aria-live="polite"></span>
+          </div>
+        </div>
+
         <div id="providerWarning" class="ai-warning" style="display:none"></div>
       </div>
 

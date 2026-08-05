@@ -34,11 +34,21 @@ const regenerateBtn = document.getElementById("regenerateBtn");
 const modelProbeBtn = document.getElementById("modelProbeBtn");
 const modelProbeStatus = document.getElementById("modelProbeStatus");
 const copyBtn = document.getElementById("copyBtn");
+const feedbackPanel = document.getElementById("feedbackPanel");
+const feedbackStateBadge = document.getElementById("feedbackStateBadge");
+const feedbackCorrectionFields = document.getElementById("feedbackCorrectionFields");
+const actualCauseInput = document.getElementById("actualCause");
+const actualFixInput = document.getElementById("actualFix");
+const feedbackNotesInput = document.getElementById("feedbackNotes");
+const saveFeedbackBtn = document.getElementById("saveFeedbackBtn");
+const feedbackSaveStatus = document.getElementById("feedbackSaveStatus");
+const feedbackVerdictButtons = Array.from(document.querySelectorAll(".feedback-verdict"));
 
 let currentReport = null;
 let currentAgentPayload = null;
 let availableTests = [];
 let currentSelectedTest = null;
+let selectedFeedbackVerdict = null;
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -83,11 +93,131 @@ function setAiLoading(value) {
   regenerateBtn.disabled = value;
   modelProbeBtn.disabled = value;
   copyBtn.disabled = value;
+  if (saveFeedbackBtn) saveFeedbackBtn.disabled = value || !selectedFeedbackVerdict || !currentAgentPayload?.memory?.memory_id;
 }
 
 function setAiError(message) {
   aiError.style.display = message ? "block" : "none";
   aiError.textContent = message || "";
+}
+
+
+function setFeedbackStatus(message, kind = '') {
+  if (!feedbackSaveStatus) return;
+  feedbackSaveStatus.textContent = message || '';
+  feedbackSaveStatus.className = `feedback-save-status${kind ? ` ${kind}` : ''}`;
+}
+
+function feedbackStatusLabel(status) {
+  if (status === 'verified') return 'Verified';
+  if (status === 'corrected') return 'Human corrected';
+  if (status === 'rejected') return 'Rejected';
+  if (status === 'not_stored') return 'Not stored';
+  return 'Not reviewed';
+}
+
+function selectFeedbackVerdict(verdict, { preserveStatus = false } = {}) {
+  selectedFeedbackVerdict = verdict || null;
+  feedbackVerdictButtons.forEach(button => {
+    button.classList.toggle('selected', button.dataset.feedback === selectedFeedbackVerdict);
+  });
+
+  const needsCorrection = ['partially_correct', 'incorrect'].includes(selectedFeedbackVerdict);
+  if (feedbackCorrectionFields) feedbackCorrectionFields.style.display = needsCorrection ? 'grid' : 'none';
+  if (saveFeedbackBtn) {
+    saveFeedbackBtn.disabled = !selectedFeedbackVerdict || !currentAgentPayload?.memory?.memory_id;
+  }
+  if (!preserveStatus) setFeedbackStatus('');
+}
+
+function renderFeedbackState(payload) {
+  const memory = payload?.memory || {};
+  const feedback = payload?.human_feedback || memory.human_feedback || null;
+  const memoryStatus = payload?.memory_status || memory.memory_status || 'unreviewed';
+  const canReview = Boolean(memory.memory_id);
+
+  if (feedbackStateBadge) {
+    feedbackStateBadge.textContent = feedbackStatusLabel(memoryStatus);
+    feedbackStateBadge.className = `feedback-state-badge ${memoryStatus}`;
+  }
+
+  selectFeedbackVerdict(feedback?.verdict || null, { preserveStatus: true });
+  if (actualCauseInput) actualCauseInput.value = feedback?.actual_cause || '';
+  if (actualFixInput) actualFixInput.value = feedback?.actual_fix || '';
+  if (feedbackNotesInput) feedbackNotesInput.value = feedback?.notes || '';
+
+  feedbackVerdictButtons.forEach(button => { button.disabled = !canReview; });
+  if (actualCauseInput) actualCauseInput.disabled = !canReview;
+  if (actualFixInput) actualFixInput.disabled = !canReview;
+  if (feedbackNotesInput) feedbackNotesInput.disabled = !canReview;
+  if (saveFeedbackBtn) saveFeedbackBtn.disabled = !canReview || !selectedFeedbackVerdict;
+
+  if (!canReview) {
+    setFeedbackStatus('Feedback is unavailable because this analysis was not stored in AI memory.');
+  } else if (feedback) {
+    setFeedbackStatus(`Last review saved as ${feedbackStatusLabel(memoryStatus).toLowerCase()}.`, 'success');
+  } else {
+    setFeedbackStatus('');
+  }
+}
+
+async function saveFeedback() {
+  if (!currentAgentPayload?.memory?.memory_id || !selectedFeedbackVerdict) return;
+
+  const actualCause = String(actualCauseInput?.value || '').trim();
+  const actualFix = String(actualFixInput?.value || '').trim();
+  const notes = String(feedbackNotesInput?.value || '').trim();
+
+  if (selectedFeedbackVerdict === 'partially_correct' && !actualCause && !actualFix) {
+    setFeedbackStatus('Provide the actual cause or actual fix for partially correct feedback.', 'error');
+    return;
+  }
+
+  saveFeedbackBtn.disabled = true;
+  setFeedbackStatus('Saving feedback...');
+
+  try {
+    const locator = paramsFromLocation();
+    const response = await fetch('/api/ai/test-agent-feedback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...locator,
+        ...selectedTestRequestFields(),
+        memory_id: currentAgentPayload.memory.memory_id,
+        feedback: selectedFeedbackVerdict,
+        actual_cause: actualCause || null,
+        actual_fix: actualFix || null,
+        notes: notes || null,
+        provider: currentAgentPayload.provider || null,
+        inference_id: currentAgentPayload.inference?.inference_id || null,
+        evidence_hash: currentAgentPayload.evidence_hash || null,
+      }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.error || `Failed saving feedback: HTTP ${response.status}`);
+    }
+
+    currentAgentPayload.memory = {
+      ...currentAgentPayload.memory,
+      memory_status: payload.memory_status,
+      retrieval_enabled: payload.retrieval_enabled,
+      human_feedback: payload.human_feedback,
+      effective_failure_cause: payload.effective_failure_cause,
+      effective_suggested_fix: payload.effective_suggested_fix,
+    };
+    currentAgentPayload.memory_status = payload.memory_status;
+    currentAgentPayload.retrieval_enabled = payload.retrieval_enabled;
+    currentAgentPayload.human_feedback = payload.human_feedback;
+    renderFeedbackState(currentAgentPayload);
+    setFeedbackStatus('Feedback saved and AI memory updated.', 'success');
+  } catch (error) {
+    console.error(error);
+    setFeedbackStatus(error.message || 'Failed saving feedback.', 'error');
+  } finally {
+    saveFeedbackBtn.disabled = !selectedFeedbackVerdict || !currentAgentPayload?.memory?.memory_id;
+  }
 }
 
 function normalizeLabel(value) {
@@ -228,11 +358,14 @@ function renderHistory(agent) {
     const cause = match.failure_cause || "No previous cause recorded.";
     const fix = match.suggested_fix || "No previous fix recorded.";
     const score = typeof match.score === "number" ? `${Math.round(match.score * 100)}% similar` : "similar";
+    const reviewStatus = match.memory_status || "unreviewed";
+    const reviewLabel = reviewStatus === "corrected" ? "Human corrected" : reviewStatus === "verified" ? "Human verified" : "AI generated";
     return `<div class="history-card">
       <div class="history-title-row">
         <div class="history-title">${escapeHtml(title)}</div>
         <span class="history-score">${escapeHtml(score)}</span>
       </div>
+      <span class="history-review-status ${escapeHtml(reviewStatus)}">${escapeHtml(reviewLabel)}</span>
       <div class="history-meta">${escapeHtml(meta)}</div>
       <div class="history-body"><strong>Cause:</strong> ${escapeHtml(cause)}</div>
       <div class="history-body"><strong>Fix:</strong> ${escapeHtml(fix)}</div>
@@ -268,6 +401,7 @@ function renderAgent(payload) {
   renderFixSteps(fix.steps || []);
   renderHistory(agent);
   renderEvidence(evidenceFromPayload(payload));
+  renderFeedbackState(payload);
 
   if (payload.provider_warning || payload.cache_warning) {
     providerWarning.style.display = "block";
@@ -424,8 +558,15 @@ reportFrame.addEventListener("load", () => {
 regenerateBtn.addEventListener("click", () => loadAgentAnalysis(true));
 modelProbeBtn.addEventListener("click", runModelProbe);
 copyBtn.addEventListener("click", copyAnalysis);
+saveFeedbackBtn?.addEventListener("click", saveFeedback);
+feedbackVerdictButtons.forEach(button => {
+  button.addEventListener("click", () => selectFeedbackVerdict(button.dataset.feedback || null));
+});
 testSelect.addEventListener("change", () => {
   updateSelectedTest(testSelect.value);
+  currentAgentPayload = null;
+  selectFeedbackVerdict(null);
+  renderFeedbackState({ memory_status: "not_stored", memory: {} });
   loadAgentAnalysis(false);
 });
 
