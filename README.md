@@ -1,12 +1,22 @@
 # AutomationHub (Allure Reports Portal)
 
-AutomationHub is a lightweight **FastAPI + single-page UI** that lists automation **test runs** and opens the corresponding **Allure HTML report** stored in **Azure Blob Storage**.
+AutomationHub is a **FastAPI + single-page dashboard** for browsing automation runs and investigating Allure failures stored in Azure Blob Storage.
+
+The portal now combines four workflows:
+
+1. **Run monitoring** — filter and open uploaded Allure executions.
+2. **Test-level statistics** — compare passed, failed, and error results by test name and identify the top recurring failures.
+3. **AI Failure Agent** — generate a structured diagnosis for one selected failed test using the local Phi-3 GGUF model and reviewed failure memory.
+4. **Floating Failure Chat Assistant** — ask follow-up questions from `index.html` before opening the full report.
 
 A typical workflow:
-1. Your **Runner** container executes Playwright tests.
-2. Runner generates an Allure report (`allure-report/index.html`) and uploads artifacts to Blob Storage under a structured path.
-3. **AutomationHub** reads `run.json` files from Blob Storage to build a **filterable Runs table** (env/platform/suite/search).
-4. Clicking a run row opens the public `index.html` report in a new browser tab.
+
+1. The Runner container executes Playwright tests.
+2. The Runner generates an Allure report and uploads the report artifacts plus `run.json` to Blob Storage.
+3. AutomationHub reads the run metadata to build the dashboard and reads Allure test-case artifacts for test-level statistics.
+4. A user can open the complete report, request a structured AI analysis, submit human feedback, or ask a scoped question from the dashboard chat bubble.
+
+The embedded GGUF file is intentionally not stored in source-control archives. It is expected under the configured model path locally and inside the Runner image.
 
 ---
 
@@ -33,36 +43,57 @@ Note: If your container is named `reports` and `REPORTS_PREFIX=runs`, URLs look 
 ---
 
 ## Project structure
-```textmate
+
+```text
 (root-level)
-├─── src
-│      ├─── ai_agent.py
-│      ├─── ai_provider.py
-│      ├─── ai_summary.py
-│      ├─── app.py
-│      ├─── main.py
-│      ├─── requirements.txt
-│      ├─── static
-│      │      ├─── app.js
-│      │      ├─── index.html 
-│      │      ├─── report-viewer.css
-│      │      ├─── report-viewer.html
-│      │      ├─── report-viewer.js
-│      │      └─── styles.css
-│      ├─── models
-│      │      ├─── .gitkeep
-│      │      ├─── automationhub-agent.gguf
-│      │      └─── README.md
-│      └─── utils
-│             ├───az.py
-│             └───vars.py
-└─── Setup
-       ├─── install.sh
-       ├─── GoldenCI
-       │      └─── Dockerfile
-       └─── RunnerCI
-              ├─── doanload-ai-model.sh
-              └─── Dockerfile      
+├── README.md
+├── pytest.ini
+├── src
+│   ├── ai_agent.py                  # Structured failure analysis orchestration
+│   ├── ai_provider.py               # Embedded llama.cpp provider and JSON schemas
+│   ├── ai_summary.py                # Existing report-summary flow
+│   ├── app.py                       # FastAPI routes and static application
+│   ├── failure_chat.py              # Scoped dashboard failure-chat orchestration
+│   ├── failure_memory.py            # Reviewed/corrected/rejected AI memory
+│   ├── main.py
+│   ├── requirements.txt
+│   ├── test_statistics.py           # Allure test-name statistics aggregation
+│   ├── static
+│   │   ├── app.js                   # Dashboard, charts, and chat bubble behavior
+│   │   ├── index.html               # Runs dashboard and floating Ask AI widget
+│   │   ├── report-viewer.css
+│   │   ├── report-viewer.html
+│   │   ├── report-viewer.js
+│   │   └── styles.css
+│   └── utils
+│       ├── az.py
+│       └── vars.py
+├── tests
+│   ├── conftest.py
+│   ├── fakes.py
+│   ├── test_app_routes.py
+│   ├── test_failure_chat.py
+│   ├── test_failure_memory_feedback.py
+│   └── test_test_statistics.py
+└── Setup
+    ├── install.sh
+    ├── GoldenCI
+    │   └── Dockerfile
+    └── RunnerCI
+        ├── Dockerfile
+        └── download-ai-model.sh
+```
+
+The expected default local model location is:
+
+```text
+<project-root>/models/automationhub-agent.gguf
+```
+
+The Runner image uses:
+
+```text
+/app/models/automationhub-agent.gguf
 ```
 
 ---
@@ -88,8 +119,18 @@ Note: If your container is named `reports` and `REPORTS_PREFIX=runs`, URLs look 
 
 ---
 
-## Optional UI/behavior
-- none required for the UI; it calls /api/runs from the same host
+## Optional UI and behavior
+
+No separate frontend deployment is required. The browser calls the FastAPI routes from the same origin.
+
+The dashboard persists these UI preferences in browser `localStorage`:
+
+```text
+ah-theme            Light/dark theme
+ah-ai-chat-open     Floating AI assistant open/closed state
+```
+
+The AI chat conversation itself is kept only in the active page state and is reset when the selected run or test changes.
 
 ---
 
@@ -144,33 +185,78 @@ Open:
 ---
 
 ## API endpoints
+
+### Dashboard and reports
+
 - `GET /`
-  - Serves the UI (src/static/index.html)
+  - Serves `src/static/index.html`.
 - `GET /api/health`
-  - Basic health check
+  - Basic health check.
 - `GET /api/runs?env=&platform=&suite=&q=&limit=`
-  - Returns a JSON list of runs.
+  - Returns dashboard run metadata.
+- `GET /api/report-context?suite=&env=&platform=&run_id=`
+  - Returns report URLs, run context, and AI cache information.
+- `GET /api/report-tests?suite=&env=&platform=&run_id=`
+  - Returns failed, broken, error, and unknown Allure tests for a selected run.
+- `POST /api/test-statistics`
+  - Aggregates passed, failed, and error outcomes by test name for the dashboard charts.
 
-#### Query parameters:
-1) `env`: `qa|stage|prod` (optional)
-2) `platform`: `web|mobile|whitelabel` (optional)
-3) `suite`: `smoke|regression|bugs|sanity` (optional; omit or `all` means no filter)
-4) `q`: free-text search across `run.json` and `run_id` (optional)
-5) `limit`: default 50 (cap recommended)
+### AI analysis, chat, and feedback
 
-#### Response fields (typical):
-- `run_id, suite, env, platform, status, started_at, finished_at, report_url, results_url`
+- `POST /api/ai/report-summary`
+  - Existing report-summary endpoint for one selected test.
+- `POST /api/ai/test-agent-analysis`
+  - Generates or returns a cached structured Failure Agent analysis.
+- `POST /api/ai/failure-chat`
+  - Answers a grounded follow-up question about exactly one selected failed test.
+- `POST /api/ai/test-agent-feedback`
+  - Stores human review and reconciles verified, corrected, or rejected memory.
+- `GET /api/ai/provider-status`
+  - Reports provider, GGUF path, file state, model state, and fingerprint information.
+- `POST /api/ai/provider-probe`
+  - Invokes the local model with a random nonce and verifies a real JSON response.
+
+### `/api/runs` query parameters
+
+1. `env`: `qa|stage|prod` (optional)
+2. `platform`: `web|mobile|whitelabel` (optional)
+3. `suite`: `smoke|regression|bugs|sanity` (optional; omit or use `all` for no filter)
+4. `q`: free-text search across `run.json` and `run_id` (optional)
+5. `limit`: result limit; the backend applies a safety cap
+
+Typical run fields:
+
+```text
+run_id, suite, env, platform, status, started_at, finished_at,
+report_url, results_url, version, build_number
+```
 
 ---
 
 ## UI behavior
-The UI provides:
-1. Environment dropdown
-2. Platform dropdown
-3. Suite dropdown
-4. Search input (debounced)
-5. Runs table
-Clicking a run row opens the AutomationHub report viewer in a new tab. The viewer embeds the Blob-hosted Allure report in an iframe and shows the AI Summary Agent beside it.
+
+The main dashboard provides:
+
+1. Environment, platform, and suite filters.
+2. Debounced free-text search.
+3. Runs table with direct report access.
+4. Existing execution-level charts.
+5. **Test Outcomes by Name** statistics for passed, failed, and error tests.
+6. **Top 5 Most Failed Tests** ranked by combined failed/error occurrences.
+7. A floating **Ask AI** bubble for scoped failure investigation.
+
+The floating assistant:
+
+- Stays fixed at the bottom-right of `index.html`.
+- Can be opened from the bubble or from an **Ask AI** action on a failed run.
+- Requires one failed run and one failed/error test selection.
+- Provides quick prompts and custom questions.
+- Shows evidence references, confidence, answer type, and model/fallback status.
+- Links directly to the selected test in the full report viewer.
+- Remembers only whether the bubble is open by using `localStorage` key `ah-ai-chat-open`.
+- Does not write ordinary chat messages into long-term failure memory.
+
+The report viewer remains the deeper investigation surface. It embeds the Blob-hosted Allure report and shows structured AI analysis and human feedback controls beside it.
 
 ---
 
@@ -316,11 +402,15 @@ Then build the Runner image. The Runner Dockerfile copies the `models/` director
 /app/models
 ```
 
-### New endpoints
+### AI and statistics endpoints
 
 ```text
+GET  /api/ai/provider-status
+POST /api/ai/provider-probe
 POST /api/ai/test-agent-analysis
+POST /api/ai/failure-chat
 POST /api/ai/test-agent-feedback
+POST /api/test-statistics
 ```
 
 `POST /api/ai/test-agent-analysis` body:
@@ -337,6 +427,53 @@ POST /api/ai/test-agent-feedback
 }
 ```
 
+### Dashboard test-level statistics
+
+The dashboard keeps the existing execution-level charts and adds two Allure test-level charts:
+
+```text
+Test Outcomes by Name      - passed / failed / error occurrences grouped by test name
+Top 5 Most Failed Tests   - failed and error occurrences grouped by test name
+```
+
+The frontend submits the latest completed run locators to:
+
+```text
+POST /api/test-statistics
+```
+
+Example body:
+
+```json
+{
+  "runs": [
+    {
+      "suite": "smoke",
+      "env": "prod",
+      "platform": "web",
+      "run_id": "exec-2734-c3840a39"
+    }
+  ],
+  "max_runs": 100,
+  "max_test_cases": 5000
+}
+```
+
+The backend reads `widgets/suites.json` or `data/suites.json` first, so one Allure index Blob is normally sufficient per run. It falls back to a bounded `data/test-cases/*.json` scan only when the suite index is unavailable. Allure `broken`, `error`, and `unknown` statuses are grouped under the dashboard `error` category.
+
+### Human feedback workflow
+
+The report viewer supports `helpful`, `partially_correct`, and `incorrect` feedback. Feedback updates the related failure-memory record and also writes an immutable audit event.
+
+```text
+helpful                       -> verified and preferred during retrieval
+partially_correct             -> corrected; human cause/fix become effective
+incorrect without correction  -> rejected and excluded from retrieval
+incorrect with correction     -> corrected; only the human correction is reused
+```
+
+`partially_correct` requires an `actual_cause` or `actual_fix`. Regenerating the same analysis preserves the existing human review. Cached analyses load the current feedback state from failure memory instead of trusting stale feedback embedded in the cache.
+
 ### Failure memory
 
 AutomationHub stores historical failure memory in Blob Storage:
@@ -344,10 +481,11 @@ AutomationHub stores historical failure memory in Blob Storage:
 ```text
 ai-memory/index/failure-index.jsonl
 ai-memory/failures/<signature>/<run_id>-<test_id>.json
+ai-memory/feedback/<run_id>-<test_id>-<feedback-id>.json
 runs/<suite>/<env>/<platform>/<run_id>/ai-agent-tests/<test-id>.json
 ```
 
-This gives the agent historical context without retraining the model.
+This gives the agent historical context without retraining the model. Corrected and verified memories are ranked above unreviewed model output, while rejected memories are excluded from future prompt context.
 
 ### Required Blob permissions
 
@@ -474,3 +612,193 @@ AI_REQUIRE_MODEL_RESPONSE=true
 ```
 
 A rejected inference log now includes `finish_reason`, prompt/completion token usage, response-format mode, and whether the output appears truncated. If `finish_reason=length`, first reduce the evidence payload or raise `AI_MODEL_MAX_TOKENS` while keeping prompt tokens plus completion tokens within the 4096-token model context.
+
+## Floating AI failure assistant
+
+The dashboard (`index.html`) includes a floating **Ask AI** bubble for failure triage before opening the complete Allure report.
+
+Primary implementation files:
+
+```text
+src/failure_chat.py
+src/app.py
+src/ai_provider.py
+src/static/index.html
+src/static/app.js
+src/static/styles.css
+tests/test_failure_chat.py
+tests/test_app_routes.py
+```
+
+### Scope and behavior
+
+1. Open the bubble or click **Ask AI** on a failed run row.
+2. Select a failed/error Allure test.
+3. Choose a quick action or type a custom question.
+4. Review the grounded answer and evidence references.
+5. Open the test-scoped full report when deeper inspection is needed.
+
+Available quick actions include:
+
+```text
+Explain failure
+Check recurrence
+Next checks
+Draft bug report
+```
+
+The conversation is intentionally tied to one selected test. The backend reuses:
+
+- The cached or generated Failure Agent analysis.
+- The selected Allure failure message, trace excerpt, failed steps, and bounded attachment metadata.
+- Human-reviewed effective cause/fix memory.
+- Up to three similar previous failures.
+- The existing embedded `llama.cpp` provider and inference lock.
+
+Ordinary chat messages are not written to long-term failure memory. Only explicit feedback submitted through the report viewer changes reviewed memory.
+
+### Chat API
+
+```http
+POST /api/ai/failure-chat
+Content-Type: application/json
+```
+
+Example request:
+
+```json
+{
+  "suite": "smoke",
+  "env": "prod",
+  "platform": "web",
+  "run_id": "exec-2734-c3840a39",
+  "test_id": "63d9bf46178cb70e",
+  "test_blob": null,
+  "test_name": null,
+  "question": "Why did this test fail?",
+  "conversation_id": null,
+  "history": []
+}
+```
+
+At least one of `test_id`, `test_blob`, or `test_name` is required.
+
+Chat limits:
+
+```text
+Maximum question length:        1,500 characters
+Maximum history messages sent:  8
+Maximum characters per message: 1,200
+Maximum generated tokens:       700
+Maximum evidence references:    5
+Maximum historical matches:     3
+```
+
+Example response shape:
+
+```json
+{
+  "ok": true,
+  "conversation_id": "chat_45f8a73c12ab34cd",
+  "answer": "The test failed during the hotel-search step. The supplied evidence does not prove whether the cause was an application issue, test-data issue, or locator issue.",
+  "confidence": "medium",
+  "answer_type": "mixed",
+  "follow_up_suggestions": [
+    "What evidence supports that conclusion?",
+    "Has this failure happened before?"
+  ],
+  "evidence": [
+    {
+      "type": "failure_message",
+      "value": "Failed: fail to search hotel אוריינט"
+    }
+  ],
+  "report_viewer_url": "/report-viewer.html?suite=smoke&env=prod&platform=web&run_id=exec-2734-c3840a39&test_id=63d9bf46178cb70e",
+  "provider": "embedded_llama_cpp",
+  "fallback_used": false,
+  "actual_model_response": true,
+  "inference": {
+    "inference_id": "...",
+    "response_valid_json": true,
+    "finish_reason": "stop"
+  }
+}
+```
+
+The provider is constrained to a dedicated JSON schema:
+
+```json
+{
+  "answer": "string",
+  "confidence": "high | medium | low",
+  "answer_type": "evidence | inference | mixed | unknown",
+  "follow_up_suggestions": ["string"]
+}
+```
+
+When the model is unavailable and `AI_REQUIRE_MODEL_RESPONSE=false`, the endpoint returns a deterministic evidence-based fallback. The UI labels the response as fallback. With `AI_REQUIRE_MODEL_RESPONSE=true`, the endpoint fails rather than presenting fallback text as a model response.
+
+### Grounding contract
+
+The assistant must:
+
+- Answer only from the selected failure context, existing structured analysis, reviewed memory, and recent bounded chat history.
+- Distinguish direct evidence from inference.
+- State when the available evidence cannot determine the cause.
+- Avoid inventing selectors, HTTP statuses, source files, logs, screenshots, services, or backend failures.
+
+### Frontend state
+
+The browser keeps the conversation for the currently selected test during the active page session. Only the open/closed state is persisted:
+
+```text
+localStorage key: ah-ai-chat-open
+```
+
+Changing the selected run or test resets the active scoped conversation.
+
+
+## Tests and validation
+
+Run the automated tests from the project root:
+
+```bash
+pytest -q
+```
+
+Run Python compilation checks:
+
+```bash
+python -m compileall -q src tests
+```
+
+Run JavaScript syntax validation when Node.js is available:
+
+```bash
+node --check src/static/app.js
+node --check src/static/report-viewer.js
+```
+
+Relevant chatbot coverage:
+
+```text
+tests/test_app_routes.py      Route registration and API surface
+tests/test_failure_chat.py    Validation, grounding, fallback, and response shape
+```
+
+Relevant AI-memory and dashboard coverage:
+
+```text
+tests/test_failure_memory_feedback.py
+tests/test_test_statistics.py
+```
+
+A local or deployed end-to-end validation should also confirm:
+
+1. A failed run appears in the chat selector.
+2. `/api/report-tests` returns failed/error tests.
+3. A quick question invokes `/api/ai/failure-chat`.
+4. The response identifies real-model versus fallback output.
+5. The **Open full failure report** link targets the selected test.
+6. Chat use does not create or overwrite long-term feedback memory.
+
