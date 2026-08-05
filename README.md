@@ -329,7 +329,7 @@ If Azure OpenAI is not configured, the endpoint still works using the local heur
 
 ---
 
-## AI Failure Agent v2 — embedded GGUF model, Option A
+## AI Failure Agent v2 — embedded GGUF model
 
 This version adds the **AI Failure Agent** for selected failed tests in the Report Viewer.
 
