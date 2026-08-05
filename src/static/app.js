@@ -38,6 +38,29 @@ const ITEMS_PER_PAGE = 25;
 let chartStatus, chartSuite, chartEnv, chartPlatform, chartTestStatus, chartTopFailedTests;
 let currentTestStatistics = null;
 
+// ─── Floating AI failure-chat elements/state ───
+const aiChatLauncher = document.getElementById("aiChatLauncher");
+const aiChatUnread = document.getElementById("aiChatUnread");
+const aiChatPanel = document.getElementById("aiChatPanel");
+const aiChatClose = document.getElementById("aiChatClose");
+const aiChatProviderState = document.getElementById("aiChatProviderState");
+const aiChatRunSelect = document.getElementById("aiChatRunSelect");
+const aiChatTestSelect = document.getElementById("aiChatTestSelect");
+const aiChatScopeStatus = document.getElementById("aiChatScopeStatus");
+const aiChatMessages = document.getElementById("aiChatMessages");
+const aiChatQuickActions = document.getElementById("aiChatQuickActions");
+const aiChatOpenReport = document.getElementById("aiChatOpenReport");
+const aiChatForm = document.getElementById("aiChatForm");
+const aiChatInput = document.getElementById("aiChatInput");
+const aiChatSend = document.getElementById("aiChatSend");
+
+const AI_CHAT_OPEN_KEY = "ah-ai-chat-open";
+let aiChatFailedRuns = [];
+let aiChatTests = [];
+let aiChatConversationId = null;
+let aiChatHistory = [];
+let aiChatSending = false;
+
 // ─── Stats drawer ───
 const STATS_DRAWER_KEY = "ah-stats-collapsed";
 
@@ -677,9 +700,13 @@ function renderRows(items) {
     const statusClass = status === "passed" ? "status-passed" : status === "failed" ? "status-failed" : status === "running" ? "status-running" : "status-unknown";
     const dur = isRunning ? "—" : formatDuration(durMs(r));
     const viewerUrl = !isRunning && r.run_id ? buildReportViewerUrl(r) : "";
-    const reportLink = viewerUrl
+    const viewLink = viewerUrl
       ? `<a href="${escapeHtml(viewerUrl)}" class="report-link" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">${iconReport()} View</a>`
       : '<span class="muted">—</span>';
+    const chatLink = status === "failed"
+      ? `<button type="button" class="ai-chat-row-link" data-chat-run="${escapeHtml(buildChatRunKey(r))}" onclick="event.stopPropagation()">Ask AI</button>`
+      : "";
+    const reportLink = `<div class="report-actions">${viewLink}${chatLink}</div>`;
 
     return `<tr class="${viewerUrl ? 'clickable' : ''}" data-viewer="${escapeHtml(viewerUrl)}">
       <td class="mono" title="${escapeHtml(r.run_id)}">${escapeHtml(shortRunId(r.run_id))}</td>
@@ -813,6 +840,7 @@ async function load({ preserveExisting = false, refresh = true } = {}) {
     if (!res.ok) throw new Error(`Failed loading runs: HTTP ${res.status}`);
     const payload = await res.json();
     allRuns = payload.items || [];
+    syncAiChatRuns();
     currentPage = 1;
     applyClientFilter();
     setLastUpdatedNow();
@@ -826,6 +854,353 @@ async function load({ preserveExisting = false, refresh = true } = {}) {
   } finally {
     setLoading(false, { preserveExisting });
   }
+}
+
+// ─── Floating AutomationHub AI failure chat ───
+function buildChatRunKey(run) {
+  return [run?.suite, run?.env, run?.platform, run?.run_id]
+    .map(value => encodeURIComponent(String(value || "")))
+    .join("|");
+}
+
+function chatRunFromKey(key) {
+  return aiChatFailedRuns.find(run => buildChatRunKey(run) === key) || null;
+}
+
+function currentAiChatRun() {
+  return chatRunFromKey(aiChatRunSelect?.value || "");
+}
+
+function currentAiChatTest() {
+  const rawValue = aiChatTestSelect?.value ?? "";
+  if (rawValue === "") return null;
+  const index = Number(rawValue);
+  return Number.isInteger(index) && index >= 0 ? aiChatTests[index] || null : null;
+}
+
+function setAiChatScopeStatus(message, kind = "") {
+  if (!aiChatScopeStatus) return;
+  aiChatScopeStatus.textContent = message || "";
+  aiChatScopeStatus.className = `ai-chat-scope-status${kind ? ` ${kind}` : ""}`;
+}
+
+function setAiChatEnabled() {
+  const ready = Boolean(currentAiChatRun() && currentAiChatTest()) && !aiChatSending;
+  if (aiChatInput) aiChatInput.disabled = !ready;
+  if (aiChatSend) aiChatSend.disabled = !ready || !aiChatInput?.value.trim();
+  aiChatQuickActions?.querySelectorAll("button").forEach(button => {
+    button.disabled = !ready;
+  });
+}
+
+function setAiChatOpen(open) {
+  if (!aiChatPanel || !aiChatLauncher) return;
+  aiChatPanel.classList.toggle("is-open", open);
+  aiChatPanel.setAttribute("aria-hidden", open ? "false" : "true");
+  aiChatLauncher.setAttribute("aria-expanded", open ? "true" : "false");
+  localStorage.setItem(AI_CHAT_OPEN_KEY, open ? "1" : "0");
+  if (open) {
+    if (aiChatUnread) aiChatUnread.hidden = true;
+    if (!aiChatRunSelect?.value && aiChatFailedRuns.length) {
+      aiChatRunSelect.value = buildChatRunKey(aiChatFailedRuns[0]);
+      loadAiChatTests({ autoSelectFirst: true });
+    }
+    setTimeout(() => aiChatInput?.focus(), 180);
+  }
+}
+
+function resetAiChatConversation({ keepMessages = false } = {}) {
+  aiChatConversationId = null;
+  aiChatHistory = [];
+  if (!keepMessages && aiChatMessages) {
+    aiChatMessages.innerHTML = "";
+    appendAiChatMessage(
+      "assistant",
+      "Ask why this test failed, whether it happened before, or what to check first."
+    );
+  }
+  if (aiChatOpenReport) {
+    aiChatOpenReport.hidden = true;
+    aiChatOpenReport.href = "#";
+  }
+}
+
+function appendAiChatMessage(role, content, options = {}) {
+  if (!aiChatMessages) return null;
+  const row = document.createElement("div");
+  row.className = `ai-chat-message ai-chat-message-${role}`;
+
+  const bubble = document.createElement("div");
+  bubble.className = "ai-chat-message-bubble";
+  bubble.textContent = String(content || "");
+
+  if (options.evidence?.length) {
+    const evidence = document.createElement("div");
+    evidence.className = "ai-chat-message-evidence";
+    const title = document.createElement("strong");
+    title.textContent = "Evidence used: ";
+    evidence.appendChild(title);
+    evidence.appendChild(document.createTextNode(
+      options.evidence.slice(0, 3).map(item => item.value || item.type).filter(Boolean).join(" · ")
+    ));
+    bubble.appendChild(evidence);
+  }
+
+  if (options.meta) {
+    const meta = document.createElement("div");
+    meta.className = "ai-chat-message-meta";
+    meta.textContent = options.meta;
+    bubble.appendChild(meta);
+  }
+
+  row.appendChild(bubble);
+  aiChatMessages.appendChild(row);
+  aiChatMessages.scrollTop = aiChatMessages.scrollHeight;
+  return row;
+}
+
+function appendAiChatThinking() {
+  if (!aiChatMessages) return null;
+  const row = document.createElement("div");
+  row.className = "ai-chat-message ai-chat-message-assistant ai-chat-thinking";
+  row.innerHTML = '<div class="ai-chat-message-bubble"><span class="ai-chat-thinking-dot"></span><span class="ai-chat-thinking-dot"></span><span class="ai-chat-thinking-dot"></span></div>';
+  aiChatMessages.appendChild(row);
+  aiChatMessages.scrollTop = aiChatMessages.scrollHeight;
+  return row;
+}
+
+function buildAiChatReportUrl(run, test) {
+  if (!run) return "#";
+  const params = new URLSearchParams({
+    suite: String(run.suite || ""),
+    env: String(run.env || ""),
+    platform: String(run.platform || ""),
+    run_id: String(run.run_id || ""),
+  });
+  if (test?.test_id) params.set("test_id", String(test.test_id));
+  return `/report-viewer.html?${params.toString()}`;
+}
+
+function syncAiChatRuns(preferredKey = "") {
+  if (!aiChatRunSelect) return;
+  const existingKey = preferredKey || aiChatRunSelect.value;
+  aiChatFailedRuns = allRuns
+    .filter(run => String(run?.status || "").toLowerCase() === "failed")
+    .sort((a, b) => (safeDate(b.started_at)?.getTime() || 0) - (safeDate(a.started_at)?.getTime() || 0));
+
+  aiChatRunSelect.innerHTML = '<option value="">Select a failed run</option>';
+  aiChatFailedRuns.forEach(run => {
+    const option = document.createElement("option");
+    option.value = buildChatRunKey(run);
+    option.textContent = `${run.suite || "unknown"} · ${run.env || "unknown"} · ${shortRunId(run.run_id)} · ${run.version || "unknown"}`;
+    option.title = String(run.run_id || "");
+    aiChatRunSelect.appendChild(option);
+  });
+
+  if (existingKey && chatRunFromKey(existingKey)) {
+    aiChatRunSelect.value = existingKey;
+  }
+
+  if (!aiChatFailedRuns.length) {
+    setAiChatScopeStatus("No failed runs are available in the current dashboard window.");
+    aiChatTestSelect.innerHTML = '<option value="">No failed tests available</option>';
+    aiChatTestSelect.disabled = true;
+  } else if (!aiChatRunSelect.value) {
+    setAiChatScopeStatus(`${aiChatFailedRuns.length} failed run${aiChatFailedRuns.length === 1 ? "" : "s"} available.`);
+  }
+  setAiChatEnabled();
+}
+
+async function loadAiChatTests({ autoSelectFirst = false } = {}) {
+  const run = currentAiChatRun();
+  aiChatTests = [];
+  resetAiChatConversation();
+  if (!aiChatTestSelect) return;
+
+  aiChatTestSelect.innerHTML = '<option value="">Select a failed test</option>';
+  aiChatTestSelect.disabled = true;
+  setAiChatEnabled();
+
+  if (!run) {
+    setAiChatScopeStatus("Select a failed run and test to begin.");
+    return;
+  }
+
+  setAiChatScopeStatus("Loading failed tests...");
+  try {
+    const params = new URLSearchParams({
+      suite: String(run.suite || ""),
+      env: String(run.env || ""),
+      platform: String(run.platform || ""),
+      run_id: String(run.run_id || ""),
+    });
+    const response = await fetch(`/api/report-tests?${params.toString()}`);
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.error || `Failed loading failed tests: HTTP ${response.status}`);
+    }
+
+    aiChatTests = Array.isArray(payload.tests) ? payload.tests : [];
+    aiChatTestSelect.innerHTML = '<option value="">Select a failed test</option>';
+    aiChatTests.forEach((test, index) => {
+      const option = document.createElement("option");
+      option.value = String(index);
+      option.textContent = `${test.status || "failed"} · ${test.name || test.full_name || test.test_id || "Unknown test"}`;
+      option.title = String(test.full_name || test.name || "");
+      aiChatTestSelect.appendChild(option);
+    });
+    aiChatTestSelect.disabled = aiChatTests.length === 0;
+
+    if (aiChatTests.length) {
+      setAiChatScopeStatus(`${aiChatTests.length} failed or error test${aiChatTests.length === 1 ? "" : "s"} found.`);
+      if (autoSelectFirst) {
+        aiChatTestSelect.value = "0";
+        handleAiChatTestChange();
+      }
+    } else {
+      setAiChatScopeStatus("No failed Allure test-case artifacts were found for this run.");
+    }
+  } catch (error) {
+    console.error(error);
+    setAiChatScopeStatus(error.message || "Failed loading tests.", "error");
+  } finally {
+    setAiChatEnabled();
+  }
+}
+
+function handleAiChatTestChange() {
+  resetAiChatConversation();
+  const run = currentAiChatRun();
+  const test = currentAiChatTest();
+  if (run && test) {
+    setAiChatScopeStatus(`Selected: ${test.name || test.full_name || test.test_id}`);
+    if (aiChatOpenReport) {
+      aiChatOpenReport.href = buildAiChatReportUrl(run, test);
+      aiChatOpenReport.hidden = false;
+    }
+  }
+  setAiChatEnabled();
+}
+
+async function sendAiChatQuestion(rawQuestion) {
+  const question = String(rawQuestion || "").trim();
+  const run = currentAiChatRun();
+  const test = currentAiChatTest();
+  if (!question || !run || !test || aiChatSending) return;
+
+  const priorHistory = aiChatHistory.slice(-8);
+  appendAiChatMessage("user", question);
+  if (aiChatInput) {
+    aiChatInput.value = "";
+    aiChatInput.style.height = "auto";
+  }
+
+  aiChatSending = true;
+  setAiChatEnabled();
+  if (aiChatProviderState) aiChatProviderState.textContent = "Analyzing selected failure...";
+  const thinking = appendAiChatThinking();
+
+  try {
+    const response = await fetch("/api/ai/failure-chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        suite: run.suite,
+        env: run.env,
+        platform: run.platform,
+        run_id: run.run_id,
+        test_id: test.test_id || null,
+        test_blob: test.test_blob || null,
+        test_name: test.full_name || test.name || null,
+        question,
+        conversation_id: aiChatConversationId,
+        history: priorHistory,
+      }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.error || `AI chat failed: HTTP ${response.status}`);
+    }
+
+    aiChatConversationId = payload.conversation_id || aiChatConversationId;
+    aiChatHistory.push({ role: "user", content: question });
+    aiChatHistory.push({ role: "assistant", content: payload.answer || "No answer returned." });
+    aiChatHistory = aiChatHistory.slice(-10);
+
+    const modelLabel = payload.actual_model_response
+      ? "Local model"
+      : payload.fallback_used ? "Deterministic fallback" : (payload.provider || "AI");
+    const meta = `${modelLabel} · ${payload.confidence || "low"} confidence · ${payload.answer_type || "unknown"}`;
+    appendAiChatMessage("assistant", payload.answer || "No answer returned.", {
+      evidence: payload.evidence || [],
+      meta,
+    });
+
+    if (aiChatProviderState) {
+      aiChatProviderState.textContent = payload.actual_model_response
+        ? "Grounded answer from local model"
+        : "Grounded fallback answer";
+    }
+    if (payload.report_viewer_url && aiChatOpenReport) {
+      aiChatOpenReport.href = payload.report_viewer_url;
+      aiChatOpenReport.hidden = false;
+    }
+    if (!aiChatPanel?.classList.contains("is-open") && aiChatUnread) {
+      aiChatUnread.hidden = false;
+      aiChatUnread.textContent = "1";
+    }
+  } catch (error) {
+    console.error(error);
+    appendAiChatMessage("assistant", error.message || "The AI assistant could not answer this question.", {
+      meta: "Request failed",
+    });
+    if (aiChatProviderState) aiChatProviderState.textContent = "Assistant unavailable";
+  } finally {
+    thinking?.remove();
+    aiChatSending = false;
+    setAiChatEnabled();
+    aiChatInput?.focus();
+  }
+}
+
+function openAiChatForRunKey(key) {
+  const run = chatRunFromKey(key);
+  if (!run || !aiChatRunSelect) return;
+  aiChatRunSelect.value = key;
+  setAiChatOpen(true);
+  loadAiChatTests({ autoSelectFirst: true });
+}
+
+function initAiChat() {
+  if (!aiChatLauncher || !aiChatPanel) return;
+  aiChatLauncher.addEventListener("click", () => {
+    setAiChatOpen(!aiChatPanel.classList.contains("is-open"));
+  });
+  aiChatClose?.addEventListener("click", () => setAiChatOpen(false));
+  aiChatRunSelect?.addEventListener("change", () => loadAiChatTests({ autoSelectFirst: false }));
+  aiChatTestSelect?.addEventListener("change", handleAiChatTestChange);
+  aiChatQuickActions?.addEventListener("click", event => {
+    const button = event.target.closest("button[data-question]");
+    if (!button || button.disabled) return;
+    sendAiChatQuestion(button.dataset.question || "");
+  });
+  aiChatForm?.addEventListener("submit", event => {
+    event.preventDefault();
+    sendAiChatQuestion(aiChatInput?.value || "");
+  });
+  aiChatInput?.addEventListener("input", () => {
+    aiChatInput.style.height = "auto";
+    aiChatInput.style.height = `${Math.min(aiChatInput.scrollHeight, 112)}px`;
+    setAiChatEnabled();
+  });
+  aiChatInput?.addEventListener("keydown", event => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      sendAiChatQuestion(aiChatInput.value);
+    }
+  });
+  setAiChatOpen(localStorage.getItem(AI_CHAT_OPEN_KEY) === "1");
+  setAiChatEnabled();
 }
 
 // ─── Auto-poll: once per hour only ───
@@ -868,6 +1243,11 @@ pagination.addEventListener("click", (e) => {
 });
 
 rows.addEventListener("click", (e) => {
+  const chatButton = e.target.closest(".ai-chat-row-link");
+  if (chatButton?.dataset.chatRun) {
+    openAiChatForRunKey(chatButton.dataset.chatRun);
+    return;
+  }
   const tr = e.target.closest("tr.clickable");
   if (!tr || !tr.dataset.viewer) return;
   window.open(tr.dataset.viewer, "_blank", "noopener,noreferrer");
@@ -906,6 +1286,7 @@ window.addEventListener("beforeunload", stopPolling);
 showStatsLoading(false);
 showChartsLoading(false);
 showTableInitialLoading();
+initAiChat();
 setTimeout(() => {
   initCharts();
   initStatsDrawer();

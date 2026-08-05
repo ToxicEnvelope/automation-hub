@@ -167,6 +167,63 @@
     <div id="pagination" class="pagination"></div>
   </div>
 </div>
+
+<!-- AutomationHub AI failure-chat bubble -->
+<button id="aiChatLauncher" class="ai-chat-launcher" type="button" aria-label="Open AutomationHub AI assistant" aria-expanded="false" aria-controls="aiChatPanel">
+  <span class="ai-chat-launcher-icon" aria-hidden="true">
+    <svg viewBox="0 0 24 24" fill="none"><path d="M7 18.5 4 20l.9-3.4A8 8 0 1 1 20 12a7.8 7.8 0 0 1-8 7.7 8.4 8.4 0 0 1-5-.2Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M8.2 11.8h.01M12 11.8h.01M15.8 11.8h.01" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
+  </span>
+  <span class="ai-chat-launcher-label">Ask AI</span>
+  <span id="aiChatUnread" class="ai-chat-unread" hidden>1</span>
+</button>
+
+<section id="aiChatPanel" class="ai-chat-panel" aria-label="AutomationHub AI failure assistant" aria-hidden="true">
+  <header class="ai-chat-header">
+    <div class="ai-chat-heading">
+      <span class="ai-chat-avatar" aria-hidden="true">AI</span>
+      <div>
+        <div class="ai-chat-title">AutomationHub AI</div>
+        <div id="aiChatProviderState" class="ai-chat-provider-state">Failure investigation assistant</div>
+      </div>
+    </div>
+    <button id="aiChatClose" class="ai-chat-icon-btn" type="button" aria-label="Close AI assistant">×</button>
+  </header>
+
+  <div class="ai-chat-scope">
+    <label for="aiChatRunSelect">Failed run</label>
+    <select id="aiChatRunSelect">
+      <option value="">Select a failed run</option>
+    </select>
+    <label for="aiChatTestSelect">Failed test</label>
+    <select id="aiChatTestSelect" disabled>
+      <option value="">Select a failed test</option>
+    </select>
+    <div id="aiChatScopeStatus" class="ai-chat-scope-status" aria-live="polite">Select a failed run and test to begin.</div>
+  </div>
+
+  <div id="aiChatMessages" class="ai-chat-messages" aria-live="polite">
+    <div class="ai-chat-message ai-chat-message-assistant">
+      <div class="ai-chat-message-bubble">Choose a failed test, then ask why it failed or what to check first.</div>
+    </div>
+  </div>
+
+  <div id="aiChatQuickActions" class="ai-chat-quick-actions" aria-label="Suggested AI questions">
+    <button type="button" data-question="Why did this test fail?">Explain failure</button>
+    <button type="button" data-question="Has this failure happened before?">Check recurrence</button>
+    <button type="button" data-question="What should I check first?">Next checks</button>
+    <button type="button" data-question="Draft a concise bug report from the available evidence.">Draft bug report</button>
+  </div>
+
+  <a id="aiChatOpenReport" class="ai-chat-report-link" href="#" target="_blank" rel="noopener noreferrer" hidden>Open full failure report</a>
+
+  <form id="aiChatForm" class="ai-chat-composer">
+    <textarea id="aiChatInput" rows="1" maxlength="1500" placeholder="Ask about the selected failure..." disabled></textarea>
+    <button id="aiChatSend" type="submit" disabled aria-label="Send question">
+      <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m3 3 14 7-14 7 2-6 7-1-7-1-2-6Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+    </button>
+  </form>
+</section>
+
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="/static/app.js"></script>
 </body>
