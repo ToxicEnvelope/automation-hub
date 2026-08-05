@@ -18,7 +18,12 @@ from src.ai_summary import (
     heuristic_summary,
     normalize_locator,
 )
-from src.failure_memory import search_similar_failures, store_failure_memory, store_feedback
+from src.failure_memory import (
+    get_failure_memory,
+    search_similar_failures,
+    store_failure_memory,
+    store_feedback,
+)
 
 
 def _utc_now_iso() -> str:
@@ -121,6 +126,8 @@ def _compact_agent_context(evidence: Dict[str, Any], similar: list[Dict[str, Any
             "platform": _clip_text(match.get("platform"), 40),
             "test_name": _clip_text(match.get("test_name"), 220),
             "status": _clip_text(match.get("status"), 40),
+            "memory_status": _clip_text(match.get("memory_status"), 40),
+            "human_verified": bool(match.get("human_verified")),
             "failure_cause": _clip_text(match.get("failure_cause"), 360),
             "suggested_fix": _clip_text(match.get("suggested_fix"), 360),
         })
@@ -231,6 +238,54 @@ def _summary_compat_from_agent(agent: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _attach_memory_state(
+    bsc: Any,
+    payload: Dict[str, Any],
+    *,
+    run_id: str,
+    selected_test_id: Optional[str],
+    selected_test_name: Optional[str],
+) -> Dict[str, Any]:
+    memory_ref = payload.get("memory") if isinstance(payload.get("memory"), dict) else {}
+    selected = payload.get("selected_test") if isinstance(payload.get("selected_test"), dict) else {}
+    memory = get_failure_memory(
+        bsc,
+        memory_id=str(memory_ref.get("memory_id") or "").strip() or None,
+        run_id=run_id,
+        test_id=(
+            selected_test_id
+            or selected.get("test_id")
+            or selected.get("uid")
+        ),
+        test_name=(
+            selected_test_name
+            or selected.get("full_name")
+            or selected.get("name")
+        ),
+    )
+
+    if not memory:
+        payload["memory_status"] = "not_stored"
+        payload["retrieval_enabled"] = False
+        payload["human_feedback"] = None
+        return payload
+
+    memory_summary = {
+        **memory_ref,
+        "memory_id": memory.get("memory_id"),
+        "memory_status": memory.get("memory_status", "unreviewed"),
+        "retrieval_enabled": memory.get("retrieval_enabled", True),
+        "human_feedback": memory.get("human_feedback"),
+        "effective_failure_cause": memory.get("effective_failure_cause"),
+        "effective_suggested_fix": memory.get("effective_suggested_fix"),
+    }
+    payload["memory"] = memory_summary
+    payload["memory_status"] = memory_summary["memory_status"]
+    payload["retrieval_enabled"] = memory_summary["retrieval_enabled"]
+    payload["human_feedback"] = memory_summary["human_feedback"]
+    return payload
+
+
 def get_or_create_test_agent_analysis(
     bsc: Any,
     *,
@@ -258,7 +313,13 @@ def get_or_create_test_agent_analysis(
         ):
             cached["ok"] = True
             cached["cached"] = True
-            return cached
+            return _attach_memory_state(
+                bsc,
+                cached,
+                run_id=run_id,
+                selected_test_id=selected_test_id,
+                selected_test_name=selected_test_name,
+            )
 
     evidence = extract_failure_evidence(
         bsc,
@@ -334,6 +395,14 @@ def get_or_create_test_agent_analysis(
         "memory": memory_write,
         "agent_cache_blob": cache_blob,
     }
+
+    payload = _attach_memory_state(
+        bsc,
+        payload,
+        run_id=run_id,
+        selected_test_id=selected_test_id,
+        selected_test_name=selected_test_name,
+    )
 
     cache_fallback_results = _env_bool("AI_CACHE_FALLBACK_RESULTS", False)
     should_cache = provider_used != "heuristic_fallback" or cache_fallback_results

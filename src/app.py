@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import FastAPI, Query, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -26,6 +26,7 @@ from src.utils.vars import BASE_DIR, REPORTS_CONTAINER
 from src.ai_summary import get_report_context, get_or_create_report_summary, list_report_failures
 from src.ai_agent import get_or_create_test_agent_analysis, save_test_agent_feedback
 from src.ai_provider import provider_status, run_provider_probe
+from src.test_statistics import aggregate_test_statistics
 
 # -------------------- Paths --------------------
 STATIC_DIR = os.path.join(BASE_DIR, "static")
@@ -255,10 +256,27 @@ class TestAgentFeedbackRequest(BaseModel):
     test_id: Optional[str] = None
     test_blob: Optional[str] = None
     test_name: Optional[str] = None
-    feedback: str
+    memory_id: Optional[str] = None
+    feedback: Literal["helpful", "partially_correct", "incorrect"]
     actual_cause: Optional[str] = None
     actual_fix: Optional[str] = None
     notes: Optional[str] = None
+    inference_id: Optional[str] = None
+    evidence_hash: Optional[str] = None
+    provider: Optional[str] = None
+
+
+class TestStatisticsRunRequest(BaseModel):
+    suite: str
+    env: str
+    platform: str
+    run_id: str
+
+
+class TestStatisticsRequest(BaseModel):
+    runs: List[TestStatisticsRunRequest] = Field(min_length=1, max_length=200)
+    max_runs: int = Field(default=100, ge=1, le=200)
+    max_test_cases: int = Field(default=5000, ge=1, le=20000)
 
 
 @public_api.get("/runs", response_class=JSONResponse)
@@ -409,6 +427,27 @@ def list_runs(
         status_code=status.HTTP_200_OK,
         media_type="application/json",
     )
+
+
+@public_api.post("/test-statistics", response_class=JSONResponse)
+def test_statistics(body: TestStatisticsRequest) -> JSONResponse:
+    """Return bounded test-level Allure statistics for dashboard charts."""
+    try:
+        payload = aggregate_test_statistics(
+            blob_client(),
+            [run.model_dump() for run in body.runs],
+            max_runs=body.max_runs,
+            max_test_cases=body.max_test_cases,
+        )
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    except Exception as exc:
+        return JSONResponse(
+            {"ok": False, "error": f"Failed loading test statistics: {exc}"},
+            status_code=500,
+        )
+
+    return JSONResponse(payload, status_code=status.HTTP_200_OK)
 
 
 @public_api.get("/report-context", response_class=JSONResponse)
