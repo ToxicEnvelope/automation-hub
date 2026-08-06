@@ -12,6 +12,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.routing import APIRouter
 from fastapi.staticfiles import StaticFiles
 
+import hashlib
 import json
 import os
 
@@ -31,6 +32,47 @@ from src.test_statistics import aggregate_test_statistics
 
 # -------------------- Paths --------------------
 STATIC_DIR = os.path.join(BASE_DIR, "static")
+STATIC_ASSET_VERSION_TOKEN = "__STATIC_ASSET_VERSION__"
+
+
+def _compute_static_asset_version() -> str:
+    """Return a content hash used to invalidate browser/CDN static-asset caches."""
+    configured = os.getenv("AUTOMATIONHUB_STATIC_ASSET_VERSION", "").strip()
+    if configured:
+        return configured
+
+    digest = hashlib.sha256()
+    for name in sorted(os.listdir(STATIC_DIR)):
+        if not name.endswith((".css", ".js")):
+            continue
+        path = os.path.join(STATIC_DIR, name)
+        if not os.path.isfile(path):
+            continue
+        digest.update(name.encode("utf-8"))
+        with open(path, "rb") as asset_file:
+            digest.update(asset_file.read())
+    return digest.hexdigest()[:12]
+
+
+STATIC_ASSET_VERSION = _compute_static_asset_version()
+
+
+def _static_html_response(file_name: str) -> HTMLResponse:
+    path = os.path.join(STATIC_DIR, file_name)
+    with open(path, "r", encoding="utf-8") as html_file:
+        content = html_file.read().replace(
+            STATIC_ASSET_VERSION_TOKEN,
+            STATIC_ASSET_VERSION,
+        )
+
+    return HTMLResponse(
+        content=content,
+        headers={
+            "Cache-Control": "no-store, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 # -------------------- Known filter values --------------------
 # These values match the blob path layout:
@@ -190,17 +232,13 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 @app.get("/", response_class=HTMLResponse)
-def home() -> str:
-    index_path = os.path.join(STATIC_DIR, "index.html")
-    with open(index_path, "r", encoding="utf-8") as f:
-        return f.read()
+def home() -> HTMLResponse:
+    return _static_html_response("index.html")
 
 
 @app.get("/report-viewer.html", response_class=HTMLResponse)
-def report_viewer() -> str:
-    viewer_path = os.path.join(STATIC_DIR, "report-viewer.html")
-    with open(viewer_path, "r", encoding="utf-8") as f:
-        return f.read()
+def report_viewer() -> HTMLResponse:
+    return _static_html_response("report-viewer.html")
 
 
 public_api = APIRouter(prefix="/api", tags=["PublicAPI"])
