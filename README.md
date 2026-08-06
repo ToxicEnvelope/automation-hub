@@ -119,18 +119,8 @@ The Runner image uses:
 
 ---
 
-## Optional UI and behavior
-
-No separate frontend deployment is required. The browser calls the FastAPI routes from the same origin.
-
-The dashboard persists these UI preferences in browser `localStorage`:
-
-```text
-ah-theme            Light/dark theme
-ah-ai-chat-open     Floating AI assistant open/closed state
-```
-
-The AI chat conversation itself is kept only in the active page state and is reset when the selected run or test changes.
+## Optional UI/behavior
+- none required for the UI; it calls /api/runs from the same host
 
 ---
 
@@ -329,7 +319,7 @@ If Azure OpenAI is not configured, the endpoint still works using the local heur
 
 ---
 
-## AI Failure Agent v2 — embedded GGUF model
+## AI Failure Agent v2 — embedded GGUF model, Option A
 
 This version adds the **AI Failure Agent** for selected failed tests in the Report Viewer.
 
@@ -402,13 +392,10 @@ Then build the Runner image. The Runner Dockerfile copies the `models/` director
 /app/models
 ```
 
-### AI and statistics endpoints
+### New endpoints
 
 ```text
-GET  /api/ai/provider-status
-POST /api/ai/provider-probe
 POST /api/ai/test-agent-analysis
-POST /api/ai/failure-chat
 POST /api/ai/test-agent-feedback
 POST /api/test-statistics
 ```
@@ -617,19 +604,6 @@ A rejected inference log now includes `finish_reason`, prompt/completion token u
 
 The dashboard (`index.html`) includes a floating **Ask AI** bubble for failure triage before opening the complete Allure report.
 
-Primary implementation files:
-
-```text
-src/failure_chat.py
-src/app.py
-src/ai_provider.py
-src/static/index.html
-src/static/app.js
-src/static/styles.css
-tests/test_failure_chat.py
-tests/test_app_routes.py
-```
-
 ### Scope and behavior
 
 1. Open the bubble or click **Ask AI** on a failed run row.
@@ -802,3 +776,23 @@ A local or deployed end-to-end validation should also confirm:
 5. The **Open full failure report** link targets the selected test.
 6. Chat use does not create or overwrite long-term feedback memory.
 
+
+
+### Static asset cache and chat-bubble deployment
+
+The dashboard and report-viewer HTML inject a content-derived query version into local CSS and JavaScript URLs, for example:
+
+```text
+/static/styles.css?v=<content-hash>
+/static/app.js?v=<content-hash>
+```
+
+The HTML routes also return `Cache-Control: no-store`. This prevents a deployment from combining new HTML/JavaScript with an older cached stylesheet, which would render the AI chat controls as unstyled document content. An optional `AUTOMATIONHUB_STATIC_ASSET_VERSION` environment variable can override the generated content hash for controlled releases.
+
+The closed AI panel is marked `inert` and `aria-hidden`. Before closing, focus is returned to the **Ask AI** launcher. This prevents Chromium's `Blocked aria-hidden ... descendant retained focus` accessibility warning and keeps hidden chat controls outside keyboard navigation.
+
+After deploying a new image, confirm that the browser requests versioned assets in DevTools **Network**, and that the response body contains the `.ai-chat-launcher` and `.ai-chat-panel` rules:
+
+```bash
+curl -fsS http://localhost/static/styles.css | grep -E "ai-chat-launcher|ai-chat-panel"
+```
