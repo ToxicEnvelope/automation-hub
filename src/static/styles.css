@@ -1469,7 +1469,7 @@ td.run-id-cell {
   right: 24px;
   bottom: 88px;
   z-index: 999;
-  width: min(444px, calc(100vw - 32px));
+  width: min(410px, calc(100vw - 32px));
   height: min(680px, calc(100vh - 120px));
   display: flex;
   flex-direction: column;

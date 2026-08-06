@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <title>AutomationHub</title>
-  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="stylesheet" href="/static/styles.css?v=__STATIC_ASSET_VERSION__" />
 </head>
 <body>
 <div class="page-wrap">
@@ -123,6 +123,15 @@
     </div>
 
     <div class="charts-grid">
+      <div class="chart-card card">
+        <div class="chart-title">Run Status Distribution</div>
+        <div class="chart-subtitle">Execution-level status from run.json</div>
+        <div class="chart-wrap"><canvas id="chartStatus"></canvas></div>
+        <div class="loading-overlay"><div class="spinner"></div></div>
+      </div>
+      <div class="chart-card card"><div class="chart-title">Suite Distribution</div><div class="chart-wrap"><canvas id="chartSuite"></canvas></div><div class="loading-overlay"><div class="spinner"></div></div></div>
+      <div class="chart-card card"><div class="chart-title">Environment Distribution</div><div class="chart-wrap"><canvas id="chartEnv"></canvas></div><div class="loading-overlay"><div class="spinner"></div></div></div>
+      <div class="chart-card card"><div class="chart-title">Platform Distribution</div><div class="chart-wrap"><canvas id="chartPlatform"></canvas></div><div class="loading-overlay"><div class="spinner"></div></div></div>
       <div class="chart-card chart-card-wide card test-statistics-card" id="testOutcomeCard">
         <div class="chart-title">Test Outcomes by Name</div>
         <div class="chart-subtitle" id="testOutcomeMeta">Passed, failed, and error occurrences for the most observed tests</div>
@@ -177,12 +186,12 @@
   <span id="aiChatUnread" class="ai-chat-unread" hidden>1</span>
 </button>
 
-<section id="aiChatPanel" class="ai-chat-panel" aria-label="AutomationHub AI failure assistant" aria-hidden="true">
+<section id="aiChatPanel" class="ai-chat-panel" role="dialog" aria-labelledby="aiChatTitle" aria-hidden="true" inert>
   <header class="ai-chat-header">
     <div class="ai-chat-heading">
       <span class="ai-chat-avatar" aria-hidden="true">AI</span>
       <div>
-        <div class="ai-chat-title">Test Analysis Agent</div>
+        <div id="aiChatTitle" class="ai-chat-title">AutomationHub AI</div>
         <div id="aiChatProviderState" class="ai-chat-provider-state">Failure investigation assistant</div>
       </div>
     </div>
@@ -225,6 +234,6 @@
 </section>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<script src="/static/app.js"></script>
+<script src="/static/app.js?v=__STATIC_ASSET_VERSION__"></script>
 </body>
 </html>

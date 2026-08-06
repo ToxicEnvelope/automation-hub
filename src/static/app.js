@@ -895,17 +895,36 @@ function setAiChatEnabled() {
 
 function setAiChatOpen(open) {
   if (!aiChatPanel || !aiChatLauncher) return;
-  aiChatPanel.classList.toggle("is-open", open);
-  aiChatPanel.setAttribute("aria-hidden", open ? "false" : "true");
+
+  if (!open) {
+    const focusedElement = document.activeElement;
+    if (focusedElement instanceof HTMLElement && aiChatPanel.contains(focusedElement)) {
+      aiChatLauncher.focus({ preventScroll: true });
+    }
+
+    aiChatPanel.classList.remove("is-open");
+    aiChatPanel.setAttribute("inert", "");
+    aiChatPanel.setAttribute("aria-hidden", "true");
+  } else {
+    aiChatPanel.removeAttribute("inert");
+    aiChatPanel.setAttribute("aria-hidden", "false");
+    aiChatPanel.classList.add("is-open");
+  }
+
   aiChatLauncher.setAttribute("aria-expanded", open ? "true" : "false");
   localStorage.setItem(AI_CHAT_OPEN_KEY, open ? "1" : "0");
+
   if (open) {
     if (aiChatUnread) aiChatUnread.hidden = true;
     if (!aiChatRunSelect?.value && aiChatFailedRuns.length) {
       aiChatRunSelect.value = buildChatRunKey(aiChatFailedRuns[0]);
       loadAiChatTests({ autoSelectFirst: true });
     }
-    setTimeout(() => aiChatInput?.focus(), 180);
+    setTimeout(() => {
+      if (!aiChatPanel.classList.contains("is-open")) return;
+      const target = currentAiChatTest() ? aiChatInput : aiChatRunSelect;
+      target?.focus({ preventScroll: true });
+    }, 180);
   }
 }
 
@@ -1159,7 +1178,9 @@ async function sendAiChatQuestion(rawQuestion) {
     thinking?.remove();
     aiChatSending = false;
     setAiChatEnabled();
-    aiChatInput?.focus();
+    if (aiChatPanel?.classList.contains("is-open")) {
+      aiChatInput?.focus({ preventScroll: true });
+    }
   }
 }
 
@@ -1197,6 +1218,12 @@ function initAiChat() {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       sendAiChatQuestion(aiChatInput.value);
+    }
+  });
+  document.addEventListener("keydown", event => {
+    if (event.key === "Escape" && aiChatPanel.classList.contains("is-open")) {
+      event.preventDefault();
+      setAiChatOpen(false);
     }
   });
   setAiChatOpen(localStorage.getItem(AI_CHAT_OPEN_KEY) === "1");
