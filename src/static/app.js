@@ -476,7 +476,7 @@ function updateStatistics() {
   });
 
   statTotal.textContent = total.toLocaleString();
-  statTotalSub.textContent = "Loaded from last 12 hours";
+  statTotalSub.textContent = "Loaded from last 24 hours";
   const passRate = Math.round((passedCount / total) * 100);
   statPassRate.textContent = `${passRate}%`;
   statPassRateSub.textContent = `${passedCount} passed / ${total} total`;
@@ -795,7 +795,7 @@ function buildParams({ refresh = false } = {}) {
   p.set("platform", requestFilterValue("platform", platformFilterValue));
 
   p.set("limit", "200");
-  p.set("since_hours", "12");
+  p.set("since_hours", "24");
   p.set("max_blobs", "200");
   if (refresh) p.set("refresh", "1");
   return p;

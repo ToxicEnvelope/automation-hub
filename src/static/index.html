@@ -99,7 +99,7 @@
       <div class="stat-card card">
         <div class="stat-label">Total Runs</div>
         <div class="stat-value" id="statTotal">0</div>
-        <div class="stat-subtitle" id="statTotalSub">Last 12 hours</div>
+        <div class="stat-subtitle" id="statTotalSub">Last 24 hours</div>
         <div class="loading-overlay"><div class="spinner"></div></div>
       </div>
       <div class="stat-card card">
@@ -123,16 +123,7 @@
     </div>
 
     <div class="charts-grid">
-      <div class="chart-card card">
-        <div class="chart-title">Run Status Distribution</div>
-        <div class="chart-subtitle">Execution-level status from run.json</div>
-        <div class="chart-wrap"><canvas id="chartStatus"></canvas></div>
-        <div class="loading-overlay"><div class="spinner"></div></div>
-      </div>
-      <div class="chart-card card"><div class="chart-title">Suite Distribution</div><div class="chart-wrap"><canvas id="chartSuite"></canvas></div><div class="loading-overlay"><div class="spinner"></div></div></div>
-      <div class="chart-card card"><div class="chart-title">Environment Distribution</div><div class="chart-wrap"><canvas id="chartEnv"></canvas></div><div class="loading-overlay"><div class="spinner"></div></div></div>
-      <div class="chart-card card"><div class="chart-title">Platform Distribution</div><div class="chart-wrap"><canvas id="chartPlatform"></canvas></div><div class="loading-overlay"><div class="spinner"></div></div></div>
-      <div class="chart-card chart-card-wide card test-statistics-card" id="testOutcomeCard">
+        <div class="chart-card chart-card-wide card test-statistics-card" id="testOutcomeCard">
         <div class="chart-title">Test Outcomes by Name</div>
         <div class="chart-subtitle" id="testOutcomeMeta">Passed, failed, and error occurrences for the most observed tests</div>
         <div class="chart-wrap"><canvas id="chartTestStatus"></canvas></div>
