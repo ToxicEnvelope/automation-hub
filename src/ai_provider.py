@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import concurrent.futures
 import hashlib
 import json
 import logging
@@ -181,10 +182,48 @@ class AIProviderConfig:
 
 
 _PROVIDER_LOCK = threading.Lock()
-_INFERENCE_LOCK = threading.Lock()
 _EMBEDDED_MODEL: Any = None
 _EMBEDDED_MODEL_PATH: Optional[str] = None
 _MODEL_LOADED_AT: Optional[float] = None
+
+# Dedicated single-lane executor for embedded model inference calls.
+# llama.cpp has no safe mid-generation cancellation, so a slow/stuck call cannot
+# be killed once started. Running it here lets the *caller* bound its own wait
+# with future.result(timeout=...) instead of blocking indefinitely; the request
+# thread gets its response (real or fallback) within AI_MODEL_TIMEOUT_SECONDS
+# even if the background call keeps running to completion afterward.
+_INFERENCE_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=1, thread_name_prefix="ah-ai-inference"
+)
+_INFERENCE_QUEUE_LOCK = threading.Lock()
+_INFERENCE_QUEUE_DEPTH = 0
+# Once this many calls are already queued/running on the single lane, a new
+# request is told immediately to use the deterministic fallback instead of
+# joining a backlog that AI_MODEL_TIMEOUT_SECONDS has no hope of draining.
+_MAX_QUEUED_INFERENCE_CALLS = max(1, int(os.getenv("AI_MODEL_MAX_QUEUED_CALLS", "2")))
+
+
+class InferenceTimeoutError(RuntimeError):
+    """The embedded model did not return within AI_MODEL_TIMEOUT_SECONDS."""
+
+
+class InferenceBusyError(RuntimeError):
+    """Too many embedded model calls are already queued/in-flight."""
+
+
+def _acquire_inference_slot() -> bool:
+    global _INFERENCE_QUEUE_DEPTH
+    with _INFERENCE_QUEUE_LOCK:
+        if _INFERENCE_QUEUE_DEPTH >= _MAX_QUEUED_INFERENCE_CALLS:
+            return False
+        _INFERENCE_QUEUE_DEPTH += 1
+        return True
+
+
+def _release_inference_slot() -> None:
+    global _INFERENCE_QUEUE_DEPTH
+    with _INFERENCE_QUEUE_LOCK:
+        _INFERENCE_QUEUE_DEPTH = max(0, _INFERENCE_QUEUE_DEPTH - 1)
 
 
 def _default_model_path() -> str:
@@ -200,10 +239,10 @@ def get_provider_config() -> AIProviderConfig:
         model_path=os.getenv("AI_MODEL_PATH", _default_model_path()).strip(),
         model_name=os.getenv("AI_MODEL_NAME", "automationhub-agent.gguf").strip(),
         context_tokens=int(os.getenv("AI_MODEL_CONTEXT_TOKENS", "4096")),
-        threads=int(os.getenv("AI_MODEL_THREADS", str(max(1, min(4, os.cpu_count() or 2))))),
+        threads=int(os.getenv("AI_MODEL_THREADS", str(max(1, os.cpu_count() or 4)))),
         max_tokens=int(os.getenv("AI_MODEL_MAX_TOKENS", "900")),
         temperature=float(os.getenv("AI_MODEL_TEMPERATURE", "0.0")),
-        timeout_seconds=int(os.getenv("AI_MODEL_TIMEOUT_SECONDS", "180")),
+        timeout_seconds=int(os.getenv("AI_MODEL_TIMEOUT_SECONDS", "60")),
         chat_format=os.getenv("AI_MODEL_CHAT_FORMAT", "").strip(),
         require_model_response=_env_bool("AI_REQUIRE_MODEL_RESPONSE", False),
     )
@@ -259,6 +298,8 @@ def provider_status() -> Dict[str, Any]:
         "timeout_seconds": cfg.timeout_seconds,
         "chat_format": cfg.chat_format or "auto",
         "require_model_response": cfg.require_model_response,
+        "max_queued_inference_calls": _MAX_QUEUED_INFERENCE_CALLS,
+        "current_inference_queue_depth": _INFERENCE_QUEUE_DEPTH,
     }
 
 
@@ -325,25 +366,56 @@ def embedded_llama_cpp_chat(
         },
     }
     response_format_mode = "json_schema"
-    with _INFERENCE_LOCK:
-        try:
-            result = llm.create_chat_completion(**completion_kwargs)
-        except (TypeError, ValueError) as exc:
-            error_text = str(exc).lower()
-            if "response_format" not in error_text and "schema" not in error_text:
-                raise
 
-            # Retain JSON grammar when an older binding rejects JSON Schema.
-            response_format_mode = "json_object"
-            completion_kwargs["response_format"] = {"type": "json_object"}
-            try:
-                result = llm.create_chat_completion(**completion_kwargs)
-            except (TypeError, ValueError) as json_exc:
-                if "response_format" not in str(json_exc).lower():
-                    raise
-                response_format_mode = "none"
-                completion_kwargs.pop("response_format", None)
-                result = llm.create_chat_completion(**completion_kwargs)
+    def _run(kwargs: Dict[str, Any]) -> Any:
+        # Runs on the single-lane executor thread. Always frees its queue slot
+        # on the way out, even if the caller below gave up waiting first.
+        try:
+            return llm.create_chat_completion(**kwargs)
+        finally:
+            _release_inference_slot()
+
+    def _call_with_timeout(kwargs: Dict[str, Any]) -> Any:
+        if not _acquire_inference_slot():
+            raise InferenceBusyError(
+                f"AutomationHub AI agent already has {_MAX_QUEUED_INFERENCE_CALLS} "
+                "request(s) queued; using the deterministic fallback instead of "
+                "waiting in line."
+            )
+        future = _INFERENCE_EXECUTOR.submit(_run, kwargs)
+        try:
+            return future.result(timeout=cfg.timeout_seconds)
+        except concurrent.futures.TimeoutError as exc:
+            elapsed = round((time.perf_counter() - started) * 1000, 2)
+            logger.warning(
+                "AI model inference exceeded AI_MODEL_TIMEOUT_SECONDS=%s elapsed_ms=%s; "
+                "returning the deterministic fallback while the model call keeps "
+                "running in the background.",
+                cfg.timeout_seconds,
+                elapsed,
+            )
+            raise InferenceTimeoutError(
+                f"Embedded model did not respond within {cfg.timeout_seconds}s"
+            ) from exc
+
+    try:
+        result = _call_with_timeout(completion_kwargs)
+    except (TypeError, ValueError) as exc:
+        error_text = str(exc).lower()
+        if "response_format" not in error_text and "schema" not in error_text:
+            raise
+
+        # Retain JSON grammar when an older binding rejects JSON Schema.
+        response_format_mode = "json_object"
+        completion_kwargs["response_format"] = {"type": "json_object"}
+        try:
+            result = _call_with_timeout(completion_kwargs)
+        except (TypeError, ValueError) as json_exc:
+            if "response_format" not in str(json_exc).lower():
+                raise
+            response_format_mode = "none"
+            completion_kwargs.pop("response_format", None)
+            result = _call_with_timeout(completion_kwargs)
 
     elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
     choice = (result.get("choices") or [{}])[0]
