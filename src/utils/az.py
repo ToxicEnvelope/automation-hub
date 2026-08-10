@@ -211,12 +211,16 @@ def list_recent_run_json_blobs(
     """
     Best-effort fast listing:
       - scan up to `max_pages_to_scan` pages
-      - collect up to `max_items` blob names
-      - keep only run.json blobs with last_modified within last `since_hours`
+      - keep only run.json blobs with last_modified within the last `since_hours`
+      - return the `max_items` most recent qualifying blobs
 
     IMPORTANT:
-      Azure listing order is NOT guaranteed by last_modified.
-      This is still great in practice as a "fast UI" mode.
+      Azure listing order is NOT guaranteed to be chronological, so we cannot
+      stop scanning as soon as `max_items` qualifying blobs are found (an early
+      return would keep an arbitrary subset instead of the truly most recent
+      ones). We scan the full page budget within this call and sort by
+      last_modified before truncating, at the cost of always paying for
+      max_pages_to_scan pages rather than sometimes short-circuiting sooner.
     """
     require("REPORTS_CONTAINER", REPORTS_CONTAINER)
 
@@ -230,7 +234,12 @@ def list_recent_run_json_blobs(
     prefix = compute_name_starts_with(suite=suite, env=env, platform=platform)
     cc = bsc.get_container_client(REPORTS_CONTAINER)
 
-    collected: List[str] = []
+    # (last_modified, blob_name) for every qualifying blob seen during the scan.
+    # We cannot stop early once `max_items` is reached: Azure's listing order is
+    # not chronological, so an early return would silently keep whichever N
+    # blobs happen to sort earliest rather than the N that are actually most
+    # recent. We scan the full page budget, then sort-and-truncate at the end.
+    collected: List[Tuple[datetime, str]] = []
     token: Optional[str] = None
 
     # Prefer server-side suffix filtering if supported
@@ -254,22 +263,24 @@ def list_recent_run_json_blobs(
 
             for b in page:
                 lm = getattr(b, "last_modified", None)
+                lm_utc = datetime.min.replace(tzinfo=timezone.utc)
                 if lm is not None:
                     try:
-                        if _as_utc(lm) < since_dt:
-                            continue
+                        lm_utc = _as_utc(lm)
                     except Exception:
-                        pass
+                        lm_utc = datetime.min.replace(tzinfo=timezone.utc)
+                    else:
+                        if lm_utc < since_dt:
+                            continue
 
-                collected.append(b.name)
-                if len(collected) >= max_items:
-                    return collected
+                collected.append((lm_utc, b.name))
 
             token = pages.continuation_token
             if not token:
                 break
 
-        return collected
+        collected.sort(key=lambda item: item[0], reverse=True)
+        return [name for _, name in collected[:max_items]]
     except TypeError:
         # Older SDK: no name_ends_with
         pass
@@ -293,22 +304,24 @@ def list_recent_run_json_blobs(
                 continue
 
             lm = getattr(b, "last_modified", None)
+            lm_utc = datetime.min.replace(tzinfo=timezone.utc)
             if lm is not None:
                 try:
-                    if _as_utc(lm) < since_dt:
-                        continue
+                    lm_utc = _as_utc(lm)
                 except Exception:
-                    pass
+                    lm_utc = datetime.min.replace(tzinfo=timezone.utc)
+                else:
+                    if lm_utc < since_dt:
+                        continue
 
-            collected.append(b.name)
-            if len(collected) >= max_items:
-                return collected
+            collected.append((lm_utc, b.name))
 
         token = pages.continuation_token
         if not token:
             break
 
-    return collected
+    collected.sort(key=lambda item: item[0], reverse=True)
+    return [name for _, name in collected[:max_items]]
 
 
 def encode_cursor(token: Optional[str], skip: int, page_size: int) -> Optional[str]:
