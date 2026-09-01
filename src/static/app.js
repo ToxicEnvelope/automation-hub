@@ -616,8 +616,9 @@ function statusWeight(status) {
 
 function normalizeFilterValue(v) {
   if (v == null) return "";
-  const s = String(v).trim().toLowerCase();
-  return (s === "" || s === "all") ? "" : s;
+  // Only an empty value means "no filter selected". "all" is a real suite
+  // name (a combined run covering every suite), not a synonym for "clear".
+  return String(v).trim().toLowerCase();
 }
 
 function matchesQuery(r, q) {
@@ -771,7 +772,9 @@ function applyClientFilter() {
 
 function requestFilterValue(kind, value) {
   const normalized = normalizeFilterValue(value);
-  if (!normalized) return "all";
+  // Empty means "no filter for this dimension" -- sent as "" so the backend
+  // can tell it apart from an explicit filter for the literal "all" suite.
+  if (!normalized) return "";
 
   if (kind === "env") {
     if (normalized === "production") return "prod";
@@ -789,7 +792,9 @@ function buildParams({ refresh = false } = {}) {
   const p = new URLSearchParams();
 
   // Always send all three filter dimensions.
-  // The backend now interprets `all` safely inside one request by scanning narrow prefixes server-side.
+  // An empty value means "no filter for this dimension"; the backend expands
+  // that into narrow per-suite/env/platform prefixes server-side. An explicit
+  // "all" is sent as-is and matches only the literal "all" suite.
   p.set("suite", requestFilterValue("suite", suiteFilterValue));
   p.set("env", requestFilterValue("env", envFilterValue));
   p.set("platform", requestFilterValue("platform", platformFilterValue));
