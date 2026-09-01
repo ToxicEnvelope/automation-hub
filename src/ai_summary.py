@@ -30,7 +30,7 @@ def _safe_segment(value: str, name: str, *, lower: bool = True) -> str:
     raw = str(value or "").strip()
     if lower:
         raw = raw.lower()
-    if not raw or raw == "all":
+    if not raw:
         raise ValueError(f"Missing required {name}")
     if "/" in raw or "\\" in raw or ".." in raw:
         raise ValueError(f"Invalid {name}")
