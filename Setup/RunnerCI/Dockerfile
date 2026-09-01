@@ -11,8 +11,12 @@ ARG AI_MODEL_REQUIRED="false"
 # Copy application code
 COPY src /app/src
 COPY models /app/models
-COPY models/automationhub-agent.gguf /app/models/automationhub-agent.gguf
 COPY Setup/RunnerCI/download-ai-model.sh /tmp/download-ai-model.sh
+
+# Normalize line endings before the script is ever executed -- a CRLF shebang
+# (e.g. from a Windows checkout) makes `env` look for a program literally
+# named "bash\r" and fails with "No such file or directory".
+RUN sed -i 's/\r$//' /tmp/download-ai-model.sh
 
 RUN chmod +x /tmp/download-ai-model.sh \
     && AI_MODEL_DOWNLOAD_URL="${AI_MODEL_DOWNLOAD_URL}" \
@@ -31,7 +35,7 @@ RUN chmod +x /tmp/download-ai-model.sh \
     && rm -f /tmp/download-ai-model.sh
 
 # Normalize line endings just in case
-RUN find /app -type f \( -name "*.py" -o -name "*.html" -o -name "*.js" -o -name "*.css" \) \
+RUN find /app -type f \( -name "*.py" -o -name "*.html" -o -name "*.js" -o -name "*.css" -o -name "*.sh" \) \
     -print0 | xargs -0 -r sed -i 's/\r$//'
 
 ENV PYTHONPATH=/app \
