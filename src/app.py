@@ -78,9 +78,15 @@ def _static_html_response(file_name: str) -> HTMLResponse:
 # These values match the blob path layout:
 #   [<optional_prefix>/]<suite>/<env>/<platform>/<run_id>/run.json
 #
-# "all" is expanded server-side into these narrow prefixes. This avoids one broad
-# Azure listing that can be cut off by max_blobs and return only one prefix group.
-KNOWN_SUITES = ("smoke", "regression", "bugs", "sanity")
+# An unfiltered ("no dimension selected") request is expanded server-side into
+# these narrow prefixes. This avoids one broad Azure listing that can be cut
+# off by max_blobs and return only one prefix group.
+#
+# NOTE: "all" is a real suite name written by the runner (a combined run that
+# covers every suite: runs/all/<env>/<platform>/...), not just a placeholder
+# for "no suite filter". It is listed here like any other suite so it's
+# included both when no suite filter is chosen and when it's chosen explicitly.
+KNOWN_SUITES = ("smoke", "regression", "bugs", "sanity", "all")
 KNOWN_ENVS = ("qa", "stage", "prod")
 KNOWN_PLATFORMS = ("web", "mobile", "whitelabel")
 
@@ -90,13 +96,16 @@ def _normalize_filter_value(kind: str, value: Optional[str]) -> Optional[str]:
     """
     Normalize request values and blob path values for reliable comparison.
 
-    Returns None for empty/All values, meaning "do not filter this dimension".
+    Returns None for an empty/missing value, meaning "do not filter this
+    dimension" (i.e. no chip selected). An explicit value of "all" is treated
+    as a literal filter value rather than a "clear filter" synonym, since
+    "all" is now itself a valid suite name.
     """
     if value is None:
         return None
 
     v = str(value).strip().lower()
-    if not v or v == "all":
+    if not v:
         return None
 
     if kind == "env":
@@ -138,8 +147,12 @@ def _candidate_filter_combinations(
     Build narrow Azure-prefix combinations for the request.
 
     Example:
-      suite=all&env=prod&platform=web
+      suite=<empty>&env=prod&platform=web
       -> smoke/prod/web + regression/prod/web + bugs/prod/web + sanity/prod/web
+         + all/prod/web
+
+      suite=all&env=prod&platform=web
+      -> all/prod/web only (an explicit "all" is a specific suite, not a wildcard)
     """
     suites = _expand_filter_value("suite", suite, KNOWN_SUITES)
     envs = _expand_filter_value("env", env, KNOWN_ENVS)
@@ -356,13 +369,15 @@ def list_runs(
 ) -> JSONResponse:
     """
     FAST listing (no cache, no locks):
-      - supports suite/env/platform specific filters and explicit "all"
-      - expands "all" server-side into narrow Azure prefixes
+      - supports suite/env/platform specific filters, including the literal
+        "all" suite (a combined run covering every suite)
+      - an omitted/empty dimension is expanded server-side into narrow Azure
+        prefixes for every known value of that dimension
       - scans only recent blobs by last_modified
       - downloads/parses only bounded candidate run.json blobs
       - returns a single page: { items: Run[], next_cursor: null }
 
-    Why server-side "all" expansion exists:
+    Why server-side expansion exists:
       A single broad Azure listing can be cut off by max_blobs and return only one
       lexical/prefix group. Narrow prefix expansion avoids that while keeping the
       browser to one HTTP request per refresh.
