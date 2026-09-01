@@ -50,7 +50,14 @@ def compute_name_starts_with(
       <REPORTS_PREFIX>/<suite>/<env>/<platform>/<run_id>/run.json
 
     Due to hierarchical nature of blob storage, we can only use leading segments
-    as the prefix. Any "all" value means we must search broader and filter client-side.
+    as the prefix. Callers are expected to pass concrete, specific values here
+    (never a "no filter" sentinel) -- "all" is now a real suite name written by
+    the runner (runs/all/<env>/<platform>/...), so it is treated like any other
+    literal path segment, not stripped/broadened. Broadening an unspecified
+    dimension into "search everything" is handled by the caller (see
+    src/app.py's `_expand_filter_value`/`_candidate_filter_combinations`),
+    which expands an absent filter into one concrete combination per known
+    value before ever reaching this function.
 
     Strategy: Use the longest consecutive prefix from left to right that's specific.
     """
@@ -59,14 +66,6 @@ def compute_name_starts_with(
     s = (suite or "").strip()
     e = (env or "").strip()
     p = (platform or "").strip()
-
-    # Normalize "all" to empty
-    if s.lower() == "all":
-        s = ""
-    if e.lower() == "all":
-        e = ""
-    if p.lower() == "all":
-        p = ""
 
     # Build prefix: stop at first empty segment (can only use left-to-right hierarchy)
     parts = [base] if base else []
