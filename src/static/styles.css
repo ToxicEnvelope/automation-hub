@@ -1105,6 +1105,7 @@ td.run-id-cell {
 .chip-suite-regression { --chip-color: #06b6d4; }
 .chip-suite-bugs { --chip-color: #f97316; }
 .chip-suite-sanity { --chip-color: #10b981; }
+.chip-suite-all { --chip-color: #c026d3; }
 .chip-env-qa { --chip-color: #8b5cf6; }
 .chip-env-stage { --chip-color: #f97316; }
 .chip-env-prod { --chip-color: #ef4444; }
@@ -1162,6 +1163,7 @@ td.run-id-cell {
 .value-badge-suite-regression { --badge-color: #06b6d4; }
 .value-badge-suite-bugs { --badge-color: #f97316; }
 .value-badge-suite-sanity { --badge-color: #10b981; }
+.value-badge-suite-all { --badge-color: #c026d3; }
 .value-badge-env-qa { --badge-color: #8b5cf6; }
 .value-badge-env-stage { --badge-color: #f97316; }
 .value-badge-env-prod { --badge-color: #ef4444; }
@@ -1223,6 +1225,11 @@ td.run-id-cell {
   background: rgba(16, 185, 129, .10);
   border-color: rgba(16, 185, 129, .22);
   color: #047857;
+}
+.table-badge-suite-all {
+  background: rgba(192, 38, 211, .10);
+  border-color: rgba(192, 38, 211, .22);
+  color: #86198f;
 }
 
 .table-badge-env {
@@ -1304,6 +1311,11 @@ td.run-id-cell {
   background: rgba(52, 211, 153, .14);
   border-color: rgba(52, 211, 153, .24);
   color: #a7f3d0;
+}
+.dark .table-badge-suite-all {
+  background: rgba(232, 121, 249, .14);
+  border-color: rgba(232, 121, 249, .24);
+  color: #f5d0fe;
 }
 .dark .table-badge-env,
 .dark .table-badge-env-qa {
