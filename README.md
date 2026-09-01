@@ -6,7 +6,7 @@ The portal now combines four workflows:
 
 1. **Run monitoring** — filter and open uploaded Allure executions.
 2. **Test-level statistics** — compare passed, failed, and error results by test name and identify the top recurring failures.
-3. **AI Failure Agent** — generate a structured diagnosis for one selected failed test using the local Phi-3 GGUF model and reviewed failure memory.
+3. **AI Failure Agent** — generate a structured diagnosis for one selected failed test using a local embedded GGUF model and reviewed failure memory.
 4. **Floating Failure Chat Assistant** — ask follow-up questions from `index.html` before opening the full report.
 
 A typical workflow:
@@ -40,6 +40,8 @@ For each run, the Runner uploads (recommended):
 Note: If your container is named `reports` and `REPORTS_PREFIX=runs`, URLs look like:
 > `.../reports/runs/<suite>/...`
 > If you prefer cleaner URLs, set `REPORTS_PREFIX=runs` (or similar).
+
+`<suite>` is one of `smoke`, `regression`, `bugs`, `sanity`, or `all` (a combined run covering every suite). `all` is a literal suite name here, not a wildcard.
 ---
 
 ## Project structure
@@ -208,9 +210,9 @@ Open:
 
 ### `/api/runs` query parameters
 
-1. `env`: `qa|stage|prod` (optional)
-2. `platform`: `web|mobile|whitelabel` (optional)
-3. `suite`: `smoke|regression|bugs|sanity` (optional; omit or use `all` for no filter)
+1. `env`: `qa|stage|prod` (optional; omit for every environment)
+2. `platform`: `web|mobile|whitelabel` (optional; omit for every platform)
+3. `suite`: `smoke|regression|bugs|sanity|all` (optional; omit for every suite). Note that `all` is a real suite value written by the runner for a combined run that covers every suite (`runs/all/<env>/<platform>/...`) — it is **not** a wildcard. To search across every suite, omit the parameter (or send an empty value) instead of passing `all`.
 4. `q`: free-text search across `run.json` and `run_id` (optional)
 5. `limit`: result limit; the backend applies a safety cap
 
@@ -489,8 +491,8 @@ Reader permission is enough for the dashboard/report viewer, but not enough for 
 ```env
 AI_PROVIDER=embedded_llama_cpp
 AI_MODEL_PATH=/app/models/automationhub-agent.gguf
-AI_MODEL_NAME=phi-3-mini-4k-instruct-q4
-AI_MODEL_CONTEXT_TOKENS=4096
+AI_MODEL_NAME=qwen2.5-7b-instruct-q4_k_m
+AI_MODEL_CONTEXT_TOKENS=32768
 AI_MODEL_THREADS=4
 AI_MODEL_MAX_TOKENS=900
 AI_MODEL_TEMPERATURE=0.0
@@ -498,6 +500,8 @@ AI_MODEL_TIMEOUT_SECONDS=180
 AI_MODEL_LOAD_MODE=lazy
 AI_MODEL_CACHE_ENABLED=true
 ```
+
+`AI_MODEL_NAME` and `AI_MODEL_CONTEXT_TOKENS` above match the currently recommended model (see [Swapping the embedded AI model](#swapping-the-embedded-ai-model)). They are plain strings/numbers read from the environment — nothing in the code assumes a specific model, so any GGUF works as long as the file at `AI_MODEL_PATH` matches.
 
 ### Production note
 
@@ -508,10 +512,13 @@ For the MVP, run the AI-enabled service with a single backend worker. If the ser
 ```
 docker build \
   -f Setup/RunnerCI/Dockerfile \
-  --build-arg AI_MODEL_DOWNLOAD_URL="https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf/resolve/main/Phi-3-mini-4k-instruct-q4.gguf?download=true" \
+  --build-arg AI_MODEL_DOWNLOAD_URL="https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q4_k_m.gguf?download=true" \
+  --build-arg AI_MODEL_SHA256="<sha256 of the downloaded file>" \
   --build-arg AI_MODEL_REQUIRED=true \
   -t automation-hub-runner:ai . --no-cache
   ```
+
+  `models/automationhub-agent.gguf` must **not** already exist in the build context when you change `AI_MODEL_DOWNLOAD_URL` — see [Swapping the embedded AI model](#swapping-the-embedded-ai-model) for why.
 
 ---
 
@@ -581,24 +588,124 @@ The Runner image continues to use:
 When `AI_MODEL_SHA256` is supplied during the Runner build, the build now verifies both an already-present `models/automationhub-agent.gguf` and a downloaded model before completing.
 
 
-### Phi-3 structured-output reliability fix
+### Structured-output reliability
 
-The official Phi-3 Mini 4K GGUF chat template may ignore a separate `system` message.
-AutomationHub therefore sends the agent instructions and evidence together in the first `user` message.
-The provider also uses JSON Schema mode, compacts attachment evidence, and rejects incomplete JSON instead of attempting to repair it.
+Some GGUF chat templates ignore a separate `system` message, so AutomationHub always sends the
+agent instructions and evidence together in the first `user` message rather than relying on a
+`system` role — this works the same way regardless of which model is loaded. The provider also
+uses JSON Schema mode, compacts attachment evidence, and rejects incomplete JSON instead of
+attempting to repair it.
 
-Recommended runtime settings:
+A rejected inference log includes `finish_reason`, prompt/completion token usage, response-format
+mode, and whether the output appears truncated. If `finish_reason=length`, first reduce the
+evidence payload or raise `AI_MODEL_MAX_TOKENS`, keeping prompt tokens plus completion tokens
+within the model's context window.
+
+### Swapping the embedded AI model
+
+Nothing in `src/ai_provider.py` or `src/ai_agent.py` is specific to any one model — the provider
+loads whatever GGUF file lives at `AI_MODEL_PATH` and talks to it generically through
+`llama_cpp.Llama.create_chat_completion`. Swapping models is a config and file change only; no
+application code changes are required.
+
+**The one gotcha:** `Setup/RunnerCI/download-ai-model.sh` skips downloading whenever
+`models/automationhub-agent.gguf` already exists and is non-empty in the build context. If you
+change `AI_MODEL_DOWNLOAD_URL` without first removing the existing file, the build will silently
+keep the old model. Delete (or replace) `models/automationhub-agent.gguf` before rebuilding with a
+new `AI_MODEL_DOWNLOAD_URL`. Keep the `models/` directory itself present (even empty, e.g. with a
+`.gitkeep`) so the Dockerfile's `COPY models /app/models` step still succeeds.
+
+Two current options, evaluated for this use case (CPU inference, JSON-schema-constrained output,
+one persistent backend worker rather than a per-CI-job process):
+
+**Qwen2.5-7B-Instruct** — recommended default. Purpose-tuned by Qwen for structured JSON output,
+with the most mature GGUF/llama.cpp ecosystem of current small models. Roughly double the memory
+and inference time of the previous Phi-3-mini-4k, which is an acceptable trade for an on-demand,
+human-in-the-loop diagnosis feature rather than a per-CI-job cost.
 
 ```env
-AI_PROVIDER=embedded_llama_cpp
-AI_MODEL_PATH=/app/models/automationhub-agent.gguf
-AI_MODEL_CONTEXT_TOKENS=4096
-AI_MODEL_MAX_TOKENS=900
-AI_MODEL_TEMPERATURE=0.0
-AI_REQUIRE_MODEL_RESPONSE=true
+AI_MODEL_NAME=qwen2.5-7b-instruct-q4_k_m
+AI_MODEL_CONTEXT_TOKENS=32768
 ```
 
-A rejected inference log now includes `finish_reason`, prompt/completion token usage, response-format mode, and whether the output appears truncated. If `finish_reason=length`, first reduce the evidence payload or raise `AI_MODEL_MAX_TOKENS` while keeping prompt tokens plus completion tokens within the 4096-token model context.
+```
+--build-arg AI_MODEL_DOWNLOAD_URL="https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q4_k_m.gguf?download=true"
+```
+
+Note: Qwen2.5-7B-Instruct's model card advertises up to 128K context via YaRN rope scaling, but
+that extension is only validated in vLLM. Plain `llama-cpp-python` (as used here) does not expose
+rope-scaling parameters through `AIProviderConfig` today, so 32768 is the safe native ceiling
+without a code change — still 8x the previous 4096.
+
+**Phi-4-mini-instruct** — lighter alternative if the host is RAM-constrained. Same 3.8B parameter
+count and similar quantized footprint as the previous Phi-3-mini-4k, but with a genuinely native
+128K context window and better benchmarks.
+
+```env
+AI_MODEL_NAME=phi-4-mini-instruct-q4_k_m
+AI_MODEL_CONTEXT_TOKENS=32768
+```
+
+```
+--build-arg AI_MODEL_DOWNLOAD_URL="https://huggingface.co/unsloth/Phi-4-mini-instruct-GGUF/resolve/main/Phi-4-mini-instruct-Q4_K_M.gguf?download=true"
+```
+
+(`AI_MODEL_CONTEXT_TOKENS` can be raised well beyond 32768 for Phi-4-mini specifically, since its
+128K context is native rather than YaRN-extrapolated — raise it if evidence payloads need the
+extra room.)
+
+Leave `AI_MODEL_CHAT_FORMAT` unset for either model so `llama-cpp-python` auto-detects the chat
+template embedded in the GGUF's own metadata.
+
+**Confirming the new model is actually loaded** — `AI_MODEL_NAME` is just an operator-set label
+and proves nothing by itself. To verify the swap actually took effect:
+
+1. `GET /api/ai/provider-status` and check `model_size_bytes` (and `model_fingerprint`, which
+   becomes the real SHA-256 once `AI_MODEL_SHA256` is set) against the known size/hash of the file
+   you downloaded. This is the authoritative check — file identity, not the label.
+2. `POST /api/ai/provider-probe` confirms a real GGUF is loaded and returns valid structured JSON
+   rather than the deterministic heuristic fallback — pair it with step 1 for full confidence,
+   since the probe alone proves *a* model works, not *which* one.
+3. Temporarily set `AI_REQUIRE_MODEL_RESPONSE=true` during rollout so a failed load surfaces as a
+   hard error on `/api/ai/test-agent-analysis` instead of quietly degrading to the heuristic
+   fallback.
+4. Run one real end-to-end pass: open a known failed test in the report viewer, trigger **Ask AI**,
+   and confirm the diagnosis looks as expected.
+
+### Split (multi-part) GGUF models
+
+Some repos publish a quantization as multiple shards named
+`<name>-00001-of-00002.gguf`, `<name>-00002-of-00002.gguf`, etc. (llama.cpp's own
+`gguf-split` convention). `llama-cpp-python`'s underlying loader already supports this natively —
+point `AI_MODEL_PATH` at the **first** shard, by its original filename, and llama.cpp finds the
+rest by pattern-matching sibling files in the same directory. No application code re-implements
+that loading logic.
+
+What AutomationHub adds on top: `ai_provider.py` detects the `-NNNNN-of-MMMMM.gguf` naming
+pattern in `AI_MODEL_PATH` and treats the whole set as one model for health/status purposes —
+
+```env
+AI_MODEL_PATH=/app/models/qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf
+AI_MODEL_NAME=qwen2.5-7b-instruct-q5_k_m
+```
+
+- `GET /api/ai/provider-status` reports `model_size_bytes` as the **sum across every shard**, plus
+  `model_parts_total`, `model_parts_found`, and `model_parts_missing` — so a partially-copied
+  model (e.g. only the first shard made it into the image) is visible as a status-check failure
+  rather than something that only surfaces as a confusing load error on the first real request.
+- `/api/ai/test-agent-analysis` (and the `provider-probe`) fail fast with a clear error naming the
+  specific missing shard, instead of a generic "model not found" that would incorrectly suggest
+  the referenced shard itself is absent.
+
+Requirements: every shard must be copied into the same `models/` directory (the existing
+`COPY models /app/models` Dockerfile step already does this as long as all shard files are present
+locally when you build), and none of them may be renamed — the loader locates siblings by matching
+the `-NNNNN-of-MMMMM.gguf` pattern in the filename you pointed `AI_MODEL_PATH` at.
+
+`Setup/RunnerCI/download-ai-model.sh`'s single-URL download flow does not know how to fetch
+multiple shards, so split models must be placed into `models/` manually (or via a separate
+download step of your own) before running `docker build`, rather than through
+`AI_MODEL_DOWNLOAD_URL`.
 
 ## Floating AI failure assistant
 
