@@ -49,18 +49,19 @@
         <div class="filter-group-card">
           <div class="filter-group-label">Suite</div>
           <div class="filter-chips" id="suiteFilter">
-            <button type="button" class="filter-chip active" data-value="">All</button>
+            <button type="button" class="filter-chip active" data-value="">Any</button>
             <button type="button" class="filter-chip chip-suite-smoke" data-value="smoke">Smoke</button>
             <button type="button" class="filter-chip chip-suite-regression" data-value="regression">Regression</button>
             <button type="button" class="filter-chip chip-suite-bugs" data-value="bugs">Bugs</button>
             <button type="button" class="filter-chip chip-suite-sanity" data-value="sanity">Sanity</button>
+            <button type="button" class="filter-chip chip-suite-all" data-value="all" title="Combined run covering every suite (suite = &quot;all&quot;)">Combined</button>
           </div>
         </div>
 
         <div class="filter-group-card">
           <div class="filter-group-label">Environment</div>
           <div class="filter-chips" id="envFilter">
-            <button type="button" class="filter-chip active" data-value="">All</button>
+            <button type="button" class="filter-chip active" data-value="">Any</button>
             <button type="button" class="filter-chip chip-env-qa" data-value="qa">QA</button>
             <button type="button" class="filter-chip chip-env-stage" data-value="stage">Stage</button>
             <button type="button" class="filter-chip chip-env-prod" data-value="prod">Production</button>
@@ -70,7 +71,7 @@
         <div class="filter-group-card">
           <div class="filter-group-label">Platform</div>
           <div class="filter-chips" id="platformFilter">
-            <button type="button" class="filter-chip active" data-value="">All</button>
+            <button type="button" class="filter-chip active" data-value="">Any</button>
             <button type="button" class="filter-chip chip-platform-web" data-value="web">Web</button>
             <button type="button" class="filter-chip chip-platform-mobile" data-value="mobile">Mobile</button>
             <button type="button" class="filter-chip chip-platform-whitelabel" data-value="whitelabel">White Label</button>
@@ -182,7 +183,7 @@
     <div class="ai-chat-heading">
       <span class="ai-chat-avatar" aria-hidden="true">AI</span>
       <div>
-        <div id="aiChatTitle" class="ai-chat-title">AutomationHub AI</div>
+        <div id="aiChatTitle" class="ai-chat-title">Test Analysis Agent</div>
         <div id="aiChatProviderState" class="ai-chat-provider-state">Failure investigation assistant</div>
       </div>
     </div>
