@@ -88,6 +88,36 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in _TRUE_VALUES
 
 
+def _env_int(name: str, default: int) -> int:
+    """
+    Like os.getenv(name, default), but also treats an explicitly empty or
+    non-numeric value as "not set" instead of crashing. os.getenv's own
+    default only kicks in when the variable is entirely absent -- a
+    container/orchestrator setting it to "" (e.g. an unset templated value)
+    would otherwise reach int("") and raise, taking down every /api/ai/*
+    endpoint on the next config read.
+    """
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return int(raw.strip())
+    except ValueError:
+        logger.warning("Ignoring invalid %s=%r; using default %s", name, raw, default)
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return float(raw.strip())
+    except ValueError:
+        logger.warning("Ignoring invalid %s=%r; using default %s", name, raw, default)
+        return default
+
+
 def json_from_model_text(text: str) -> Optional[Dict[str, Any]]:
     """Extract one complete JSON object without repairing truncated model output."""
     raw = str(text or "").strip()
@@ -234,42 +264,115 @@ def _default_model_path() -> str:
 
 def get_provider_config() -> AIProviderConfig:
     provider = (os.getenv("AI_PROVIDER") or os.getenv("AI_SUMMARY_PROVIDER") or "embedded_llama_cpp").strip().lower()
+    configured_model_path = os.getenv("AI_MODEL_PATH", "").strip()
+    model_path = configured_model_path or _default_model_path()
     return AIProviderConfig(
         provider=provider,
-        model_path=os.getenv("AI_MODEL_PATH", _default_model_path()).strip(),
+        model_path=model_path,
         model_name=os.getenv("AI_MODEL_NAME", "automationhub-agent.gguf").strip(),
-        context_tokens=int(os.getenv("AI_MODEL_CONTEXT_TOKENS", "4096")),
-        threads=int(os.getenv("AI_MODEL_THREADS", str(max(1, os.cpu_count() or 4)))),
-        max_tokens=int(os.getenv("AI_MODEL_MAX_TOKENS", "900")),
-        temperature=float(os.getenv("AI_MODEL_TEMPERATURE", "0.0")),
-        timeout_seconds=int(os.getenv("AI_MODEL_TIMEOUT_SECONDS", "60")),
+        context_tokens=_env_int("AI_MODEL_CONTEXT_TOKENS", 4096),
+        threads=_env_int("AI_MODEL_THREADS", max(1, os.cpu_count() or 4)),
+        max_tokens=_env_int("AI_MODEL_MAX_TOKENS", 900),
+        temperature=_env_float("AI_MODEL_TEMPERATURE", 0.0),
+        timeout_seconds=_env_int("AI_MODEL_TIMEOUT_SECONDS", 60),
         chat_format=os.getenv("AI_MODEL_CHAT_FORMAT", "").strip(),
         require_model_response=_env_bool("AI_REQUIRE_MODEL_RESPONSE", False),
     )
 
 
+_SPLIT_GGUF_PATTERN = re.compile(
+    r"^(?P<prefix>.+)-(?P<index>\d+)-of-(?P<total>\d+)(?P<ext>\.gguf)$",
+    re.IGNORECASE,
+)
+
+
+def _split_gguf_shard_paths(path: str) -> List[str]:
+    """
+    Return every expected shard path for a (possibly split) GGUF model.
+
+    llama.cpp's own split-model convention names shards
+    "<name>-00001-of-00002.gguf", "<name>-00002-of-00002.gguf", etc. When
+    AI_MODEL_PATH points at one shard of such a set, llama.cpp's C++ loader
+    already knows how to pull in the rest by filename pattern at load time --
+    this function does not duplicate that loading logic. It exists purely so
+    AutomationHub's own health/status checks and preflight validation can see
+    the *whole* model instead of just the one referenced shard.
+
+    A path that doesn't match the split naming convention returns a
+    single-item list containing just itself, so callers can treat split and
+    non-split models identically.
+    """
+    if not path:
+        return [path]
+
+    directory, filename = os.path.split(path)
+    match = _SPLIT_GGUF_PATTERN.match(filename)
+    if not match:
+        return [path]
+
+    try:
+        total = int(match.group("total"))
+    except ValueError:
+        return [path]
+
+    if total <= 0:
+        return [path]
+
+    index_width = len(match.group("index"))
+    prefix = match.group("prefix")
+    total_str = match.group("total")
+    ext = match.group("ext")
+
+    return [
+        os.path.join(directory, f"{prefix}-{str(i).zfill(index_width)}-of-{total_str}{ext}")
+        for i in range(1, total + 1)
+    ]
+
+
 def _model_file_status(path: str) -> Dict[str, Any]:
-    exists = bool(path and os.path.isfile(path))
-    readable = bool(exists and os.access(path, os.R_OK))
+    shard_paths = _split_gguf_shard_paths(path)
+    total_parts = len(shard_paths)
+
     size_bytes = 0
-    modified_ns: Optional[int] = None
-    if exists:
+    all_exist = True
+    all_readable = True
+    latest_modified_ns: Optional[int] = None
+    missing_parts: List[str] = []
+
+    for shard_path in shard_paths:
+        shard_exists = bool(shard_path and os.path.isfile(shard_path))
+        if not shard_exists:
+            all_exist = False
+            all_readable = False
+            missing_parts.append(os.path.basename(shard_path))
+            continue
+
+        if not os.access(shard_path, os.R_OK):
+            all_readable = False
+
         try:
-            stat = os.stat(path)
-            size_bytes = int(stat.st_size)
-            modified_ns = int(stat.st_mtime_ns)
+            stat = os.stat(shard_path)
+            size_bytes += int(stat.st_size)
+            mtime_ns = int(stat.st_mtime_ns)
+            if latest_modified_ns is None or mtime_ns > latest_modified_ns:
+                latest_modified_ns = mtime_ns
         except OSError:
-            pass
+            all_readable = False
 
     configured_sha256 = os.getenv("AI_MODEL_SHA256", "").strip().lower()
-    fingerprint = configured_sha256 or (f"size:{size_bytes}:mtime_ns:{modified_ns}" if exists else "missing")
+    fingerprint = configured_sha256 or (
+        f"size:{size_bytes}:mtime_ns:{latest_modified_ns}" if all_exist else "missing"
+    )
     return {
-        "model_exists": exists,
-        "model_readable": readable,
+        "model_exists": all_exist,
+        "model_readable": bool(all_exist and all_readable),
         "model_size_bytes": size_bytes,
         "model_nonempty": size_bytes > 0,
         "configured_sha256": configured_sha256 or None,
         "model_fingerprint": fingerprint,
+        "model_parts_total": total_parts,
+        "model_parts_found": total_parts - len(missing_parts),
+        "model_parts_missing": missing_parts,
     }
 
 
@@ -308,14 +411,24 @@ def _load_embedded_llama_cpp_model(cfg: AIProviderConfig) -> Any:
 
     if not cfg.model_path:
         raise RuntimeError("AI_MODEL_PATH is empty")
-    if not os.path.isfile(cfg.model_path):
+
+    file_status = _model_file_status(cfg.model_path)
+    if not file_status["model_exists"]:
+        if file_status["model_parts_total"] > 1:
+            missing = ", ".join(file_status["model_parts_missing"])
+            raise RuntimeError(
+                f"AI_MODEL_PATH points at a {file_status['model_parts_total']}-part split GGUF "
+                f"({os.path.basename(cfg.model_path)}), but these parts are missing: {missing}. "
+                "All shards must sit in the same directory, with their original filenames, for "
+                "llama.cpp to load the split model correctly."
+            )
         raise RuntimeError(
             f"Bundled GGUF model was not found at {cfg.model_path}. "
-            "Place automationhub-agent.gguf under the project models/ directory before building the runner image."
+            "Place the model file under the project models/ directory before building the runner image."
         )
-    if not os.access(cfg.model_path, os.R_OK):
+    if not file_status["model_readable"]:
         raise RuntimeError(f"Bundled GGUF model is not readable: {cfg.model_path}")
-    if os.path.getsize(cfg.model_path) <= 0:
+    if not file_status["model_nonempty"]:
         raise RuntimeError(f"Bundled GGUF model is empty: {cfg.model_path}")
 
     with _PROVIDER_LOCK:
